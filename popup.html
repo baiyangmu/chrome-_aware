@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Context-Aware AI Assistant</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      width: 340px;
+      min-height: 420px;
+      background: #1a1a2e;
+      color: #e8e8e8;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+      overflow-x: hidden;
+    }
+
+    /* Header */
+    .popup-header {
+      padding: 20px;
+      background: linear-gradient(135deg, rgba(0, 210, 255, 0.12) 0%, rgba(123, 47, 247, 0.12) 100%);
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      text-align: center;
+    }
+
+    .popup-logo {
+      font-size: 36px;
+      margin-bottom: 8px;
+      background: linear-gradient(135deg, #00d2ff, #7b2ff7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      filter: drop-shadow(0 0 10px rgba(0, 210, 255, 0.3));
+    }
+
+    .popup-name {
+      font-size: 18px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #00d2ff, #7b2ff7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      margin-bottom: 4px;
+    }
+
+    .popup-version {
+      font-size: 11px;
+      color: #6b7394;
+      letter-spacing: 1px;
+    }
+
+    /* Content */
+    .popup-content {
+      padding: 16px 20px;
+    }
+
+    /* Open Sidebar Button */
+    .open-sidebar-btn {
+      width: 100%;
+      padding: 14px;
+      background: linear-gradient(135deg, #00d2ff 0%, #7b2ff7 100%);
+      border: none;
+      border-radius: 10px;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s;
+      letter-spacing: 0.3px;
+      margin-bottom: 16px;
+    }
+
+    .open-sidebar-btn:hover {
+      filter: brightness(1.15);
+      box-shadow: 0 4px 20px rgba(0, 210, 255, 0.3);
+      transform: translateY(-1px);
+    }
+
+    .open-sidebar-btn:active {
+      transform: translateY(0);
+    }
+
+    /* Stats Section */
+    .stats-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #6b7394;
+      margin-bottom: 10px;
+      font-weight: 600;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-bottom: 16px;
+    }
+
+    .stat-card {
+      background: #16213e;
+      border: 1px solid rgba(255, 255, 255, 0.06);
+      border-radius: 10px;
+      padding: 12px;
+      text-align: center;
+      transition: all 0.2s;
+    }
+
+    .stat-card:hover {
+      background: #0f3460;
+      border-color: rgba(0, 210, 255, 0.15);
+    }
+
+    .stat-value {
+      font-size: 24px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #00d2ff, #7b2ff7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      line-height: 1.2;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      color: #6b7394;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-top: 4px;
+    }
+
+    /* Recent Actions */
+    .recent-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: #6b7394;
+      margin-bottom: 8px;
+      font-weight: 600;
+    }
+
+    .recent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .recent-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: #16213e;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      border-radius: 8px;
+      font-size: 12px;
+      color: #a8b2d1;
+    }
+
+    .recent-item-icon {
+      font-size: 16px;
+    }
+
+    .recent-item-name {
+      flex: 1;
+    }
+
+    .recent-item-count {
+      font-size: 10px;
+      color: #6b7394;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 2px 8px;
+      border-radius: 10px;
+    }
+
+    .no-data {
+      text-align: center;
+      padding: 20px;
+      color: #6b7394;
+      font-size: 12px;
+      font-style: italic;
+    }
+
+    /* Footer */
+    .popup-footer {
+      padding: 12px 20px;
+      border-top: 1px solid rgba(255, 255, 255, 0.06);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(0, 0, 0, 0.15);
+    }
+
+    .shortcut-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      color: #6b7394;
+    }
+
+    .kbd {
+      padding: 2px 6px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      border-radius: 4px;
+      font-family: 'SF Mono', Monaco, monospace;
+      font-size: 10px;
+      color: #a8b2d1;
+    }
+
+    .footer-link {
+      font-size: 10px;
+      color: #00d2ff;
+      text-decoration: none;
+      opacity: 0.7;
+      transition: opacity 0.2s;
+    }
+
+    .footer-link:hover {
+      opacity: 1;
+    }
+  </style>
+</head>
+<body>
+  <div class="popup-header">
+    <div class="popup-logo">✦</div>
+    <div class="popup-name">Context-Aware AI</div>
+    <div class="popup-version">v1.0.0 · Intelligent Recommendations</div>
+  </div>
+
+  <div class="popup-content">
+    <button class="open-sidebar-btn" id="openSidebar">
+      ✦ Open AI Sidebar
+    </button>
+
+    <div class="stats-title">Usage Statistics</div>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value" id="totalActions">0</div>
+        <div class="stat-label">Actions Used</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="uniqueActions">0</div>
+        <div class="stat-label">Unique Actions</div>
+      </div>
+    </div>
+
+    <div class="recent-title">Most Used Actions</div>
+    <div class="recent-list" id="recentList">
+      <div class="no-data">No actions used yet. Open the sidebar to get started!</div>
+    </div>
+  </div>
+
+  <div class="popup-footer">
+    <span class="shortcut-badge">
+      <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">K</kbd>
+    </span>
+    <span class="footer-link">Context-Aware AI</span>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
