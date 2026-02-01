@@ -1,39 +1,27 @@
 // ============================================================================
-// Context-Aware AI Assistant - Popup Script
+// Context-Aware AI Assistant v2.0 — Popup Script
 // ============================================================================
 
-const ACTION_ICONS = {
-  summarize_video: '📝',
-  find_related: '🔍',
-  set_reminder: '⏰',
-  track_price: '💰',
-  compare_prices: '📊',
-  explain_code: '💡',
-  optimize_code: '⚡',
-  smart_summary: '📰',
-  extract_keypoints: '🎯',
-  translate_page: '🌐',
-  read_later: '📌',
-  analyze_sentiment: '🧠'
-};
-
-const ACTION_NAMES = {
-  summarize_video: 'Summarize Video',
-  find_related: 'Find Related',
-  set_reminder: 'Set Reminder',
-  track_price: 'Track Price',
-  compare_prices: 'Compare Prices',
-  explain_code: 'Explain Code',
-  optimize_code: 'Optimize Code',
-  smart_summary: 'Smart Summary',
-  extract_keypoints: 'Key Points',
-  translate_page: 'Translate',
-  read_later: 'Read Later',
-  analyze_sentiment: 'Sentiment'
+const ACTION_META = {
+  summarize_video:   { icon: '📝', name: 'Summarize Video' },
+  find_related:      { icon: '🔍', name: 'Find Related' },
+  set_reminder:      { icon: '⏰', name: 'Set Reminder' },
+  track_price:       { icon: '💰', name: 'Track Price' },
+  compare_prices:    { icon: '📊', name: 'Compare Prices' },
+  explain_code:      { icon: '💡', name: 'Explain Code' },
+  optimize_code:     { icon: '⚡', name: 'Optimize Code' },
+  smart_summary:     { icon: '📰', name: 'Smart Summary' },
+  extract_keypoints: { icon: '🎯', name: 'Key Points' },
+  translate_page:    { icon: '🌐', name: 'Translate' },
+  read_later:        { icon: '📌', name: 'Read Later' },
+  analyze_sentiment: { icon: '🧠', name: 'Sentiment' },
+  deep_research:     { icon: '🔬', name: 'Deep Research' },
+  generate_notes:    { icon: '📒', name: 'Study Notes' },
+  check_facts:       { icon: '✅', name: 'Fact Check' }
 };
 
 document.addEventListener('DOMContentLoaded', () => {
-  // Open sidebar button
+  // Open sidebar
   document.getElementById('openSidebar').addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (tab) {
@@ -42,17 +30,74 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Load stats
+  // Save API key
+  document.getElementById('saveKeyBtn').addEventListener('click', async () => {
+    const key = document.getElementById('apiKeyInput').value.trim();
+    if (!key) return;
+
+    const statusEl = document.getElementById('configStatus');
+    statusEl.textContent = 'Saving...';
+    statusEl.className = 'config-status';
+
+    const res = await chrome.runtime.sendMessage({ type: 'SET_API_KEY', apiKey: key });
+    if (res.configured) {
+      statusEl.textContent = 'API key saved successfully.';
+      statusEl.className = 'config-status success';
+      document.getElementById('apiKeyInput').value = '';
+      document.getElementById('apiKeyInput').placeholder = '••••••••••••  (configured)';
+      updateStatusBadge(true);
+    } else {
+      statusEl.textContent = 'Failed to save.';
+      statusEl.className = 'config-status error';
+    }
+  });
+
+  // Model change
+  document.getElementById('modelSelect').addEventListener('change', async (e) => {
+    await chrome.runtime.sendMessage({ type: 'SET_MODEL', model: e.target.value });
+    document.getElementById('configStatus').textContent = 'Model updated.';
+    document.getElementById('configStatus').className = 'config-status success';
+  });
+
+  // Load initial state
+  loadStatus();
   loadStats();
 });
+
+function updateStatusBadge(configured) {
+  const badge = document.getElementById('statusBadge');
+  if (configured) {
+    badge.textContent = 'AI Ready';
+    badge.className = 'status-badge status-configured';
+  } else {
+    badge.textContent = 'API Key Needed';
+    badge.className = 'status-badge status-unconfigured';
+  }
+}
+
+async function loadStatus() {
+  try {
+    const status = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
+    updateStatusBadge(status.configured);
+
+    if (status.configured) {
+      document.getElementById('apiKeyInput').placeholder = '••••••••••••  (configured)';
+    }
+    if (status.model) {
+      document.getElementById('modelSelect').value = status.model;
+    }
+  } catch {
+    updateStatusBadge(false);
+  }
+}
 
 async function loadStats() {
   try {
     const response = await chrome.runtime.sendMessage({ type: 'GET_STATS' });
     const history = response.history || {};
 
-    const entries = Object.entries(history).filter(([, v]) => v.count > 0);
-    const totalActions = entries.reduce((sum, [, v]) => sum + v.count, 0);
+    const entries = Object.entries(history).filter(([, v]) => v.used > 0);
+    const totalActions = entries.reduce((sum, [, v]) => sum + v.used, 0);
     const uniqueActions = entries.length;
 
     document.getElementById('totalActions').textContent = totalActions;
@@ -65,22 +110,19 @@ async function loadStats() {
       return;
     }
 
-    // Sort by count descending
-    entries.sort((a, b) => b[1].count - a[1].count);
+    entries.sort((a, b) => b[1].used - a[1].used);
 
     listEl.innerHTML = entries.slice(0, 5).map(([id, data]) => {
-      const icon = ACTION_ICONS[id] || '•';
-      const name = ACTION_NAMES[id] || id;
+      const meta = ACTION_META[id] || { icon: '•', name: id };
       return `
         <div class="recent-item">
-          <span class="recent-item-icon">${icon}</span>
-          <span class="recent-item-name">${name}</span>
-          <span class="recent-item-count">${data.count}x</span>
+          <span class="recent-item-icon">${meta.icon}</span>
+          <span class="recent-item-name">${meta.name}</span>
+          <span class="recent-item-count">${data.used}x</span>
         </div>
       `;
     }).join('');
   } catch {
-    // Extension context may not be available
     document.getElementById('recentList').innerHTML =
       '<div class="no-data">Unable to load statistics.</div>';
   }

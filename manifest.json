@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "Context-Aware AI Assistant",
-  "version": "1.0.0",
-  "description": "Intelligent recommendation plugin that analyzes page context and suggests the most relevant actions using a multi-dimensional scoring model.",
+  "version": "2.0.0",
+  "description": "AI-first intelligent assistant that uses large language models to deeply understand page context and recommend the most relevant actions.",
   "permissions": [
     "activeTab",
     "storage",
-    "alarms"
+    "alarms",
+    "tabs"
   ],
   "host_permissions": [
     "<all_urls>"

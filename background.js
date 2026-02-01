@@ -1,616 +1,961 @@
 // ============================================================================
-// Context-Aware AI Assistant - Background Service Worker
-// Recommendation Engine + Action Executor
+// Context-Aware AI Assistant v2.0 — Background Service Worker
+// Phase 3: AI-First Architecture
+//
+// Layers:
+//   1. ContextManager     — Maintains browsing history + session context
+//   2. PrivacyFilter      — Strips sensitive data before sending to LLM
+//   3. PromptBuilder      — Constructs structured prompts from context
+//   4. AIEngine           — Calls Anthropic Claude API for recommendations
+//   5. CacheLayer         — LRU cache to avoid redundant API calls
+//   6. RuleBasedFallback  — Deterministic fallback when AI is unavailable
+//   7. ActionExecutor     — Executes the chosen action
 // ============================================================================
 
-// ---------------------------------------------------------------------------
-// Action Registry - All supported actions with metadata for scoring
-// ---------------------------------------------------------------------------
-const ACTION_REGISTRY = [
-  {
-    id: 'summarize_video',
-    name: 'Summarize Video',
-    icon: '📝',
-    description: 'Generate an AI summary of the video content',
-    pageTypes: ['video'],
-    urlPatterns: ['youtube.com', 'vimeo.com', 'bilibili.com', 'youtu.be'],
-    scenarioTags: ['learning', 'entertainment', 'research'],
-    timeWeight: { morning: 1.0, afternoon: 1.0, evening: 1.2, night: 1.1 },
-    baseRelevance: 0.85
-  },
-  {
-    id: 'find_related',
-    name: 'Find Related Content',
-    icon: '🔍',
-    description: 'Search for related videos, articles, or resources',
-    pageTypes: ['video', 'article', 'news'],
-    urlPatterns: ['youtube.com', 'vimeo.com', 'medium.com', 'dev.to'],
-    scenarioTags: ['research', 'learning', 'exploration'],
-    timeWeight: { morning: 1.1, afternoon: 1.0, evening: 0.9, night: 0.8 },
-    baseRelevance: 0.70
-  },
-  {
-    id: 'set_reminder',
-    name: 'Set Watch Reminder',
-    icon: '⏰',
-    description: 'Set a reminder to watch or revisit this later',
-    pageTypes: ['video', 'article', 'news'],
-    urlPatterns: ['youtube.com', 'vimeo.com', 'bilibili.com'],
-    scenarioTags: ['productivity', 'planning'],
-    timeWeight: { morning: 1.2, afternoon: 1.1, evening: 0.9, night: 0.7 },
-    baseRelevance: 0.55
-  },
-  {
-    id: 'track_price',
-    name: 'Track Price',
-    icon: '💰',
-    description: 'Monitor price changes and get alerts on drops',
-    pageTypes: ['shopping', 'product'],
-    urlPatterns: ['amazon.com', 'ebay.com', 'walmart.com', 'taobao.com', 'jd.com'],
-    scenarioTags: ['shopping', 'savings', 'deals'],
-    timeWeight: { morning: 1.0, afternoon: 1.1, evening: 1.2, night: 1.0 },
-    baseRelevance: 0.90
-  },
-  {
-    id: 'compare_prices',
-    name: 'Compare Prices',
-    icon: '📊',
-    description: 'Search for the same product across multiple stores',
-    pageTypes: ['shopping', 'product'],
-    urlPatterns: ['amazon.com', 'ebay.com', 'walmart.com', 'bestbuy.com', 'taobao.com'],
-    scenarioTags: ['shopping', 'comparison', 'savings'],
-    timeWeight: { morning: 1.0, afternoon: 1.1, evening: 1.2, night: 0.9 },
-    baseRelevance: 0.80
-  },
-  {
-    id: 'explain_code',
-    name: 'Explain Code',
-    icon: '💡',
-    description: 'Get an AI explanation of the selected or visible code',
-    pageTypes: ['code', 'documentation'],
-    urlPatterns: ['github.com', 'gitlab.com', 'stackoverflow.com', 'codepen.io'],
-    scenarioTags: ['development', 'learning', 'debugging'],
-    timeWeight: { morning: 1.2, afternoon: 1.1, evening: 1.0, night: 0.9 },
-    baseRelevance: 0.88
-  },
-  {
-    id: 'optimize_code',
-    name: 'Suggest Optimizations',
-    icon: '⚡',
-    description: 'Analyze code and suggest performance improvements',
-    pageTypes: ['code'],
-    urlPatterns: ['github.com', 'gitlab.com', 'codepen.io'],
-    scenarioTags: ['development', 'optimization', 'refactoring'],
-    timeWeight: { morning: 1.1, afternoon: 1.2, evening: 1.0, night: 0.8 },
-    baseRelevance: 0.75
-  },
-  {
-    id: 'smart_summary',
-    name: 'Smart Summary',
-    icon: '📰',
-    description: 'Generate a concise summary of the article',
-    pageTypes: ['article', 'news', 'blog'],
-    urlPatterns: ['medium.com', 'nytimes.com', 'bbc.com', 'cnn.com', 'reuters.com'],
-    scenarioTags: ['reading', 'news', 'research'],
-    timeWeight: { morning: 1.3, afternoon: 1.0, evening: 1.1, night: 0.8 },
-    baseRelevance: 0.85
-  },
-  {
-    id: 'extract_keypoints',
-    name: 'Extract Key Points',
-    icon: '🎯',
-    description: 'Pull out the main arguments and facts',
-    pageTypes: ['article', 'news', 'blog', 'documentation'],
-    urlPatterns: ['medium.com', 'nytimes.com', 'bbc.com', 'arxiv.org'],
-    scenarioTags: ['research', 'study', 'analysis'],
-    timeWeight: { morning: 1.2, afternoon: 1.1, evening: 1.0, night: 0.7 },
-    baseRelevance: 0.78
-  },
-  {
-    id: 'translate_page',
-    name: 'Translate Page',
-    icon: '🌐',
-    description: 'Translate the page or selected text to your language',
-    pageTypes: ['any'],
-    urlPatterns: [],
-    scenarioTags: ['language', 'accessibility', 'international'],
-    timeWeight: { morning: 1.0, afternoon: 1.0, evening: 1.0, night: 1.0 },
-    baseRelevance: 0.50
-  },
-  {
-    id: 'read_later',
-    name: 'Read Later',
-    icon: '📌',
-    description: 'Save this page to your reading list',
-    pageTypes: ['any'],
-    urlPatterns: [],
-    scenarioTags: ['productivity', 'bookmarking', 'reading'],
-    timeWeight: { morning: 0.9, afternoon: 1.0, evening: 1.1, night: 1.3 },
-    baseRelevance: 0.45
-  },
-  {
-    id: 'analyze_sentiment',
-    name: 'Analyze Sentiment',
-    icon: '🧠',
-    description: 'Detect the overall tone and sentiment of the content',
-    pageTypes: ['article', 'news', 'social'],
-    urlPatterns: ['twitter.com', 'reddit.com', 'x.com'],
-    scenarioTags: ['analysis', 'research', 'social'],
-    timeWeight: { morning: 1.0, afternoon: 1.0, evening: 1.1, night: 1.0 },
-    baseRelevance: 0.60
-  }
-];
+'use strict';
 
 // ---------------------------------------------------------------------------
-// RecommendationEngine - Multi-dimensional scoring model
+// 1. ContextManager — Browsing history queue + session awareness
 // ---------------------------------------------------------------------------
-class RecommendationEngine {
+class ContextManager {
   constructor() {
-    this.actions = ACTION_REGISTRY;
-    this.userHistory = {};
-    this.loadUserHistory();
+    this.historyQueue = [];       // Recent page visits (max 15)
+    this.maxHistory = 15;
+    this.sessionStart = Date.now();
+    this.actionFeedback = {};     // { actionId: { used: N, ignored: N } }
+    this.loadPersisted();
   }
 
-  async loadUserHistory() {
+  async loadPersisted() {
     try {
-      const data = await chrome.storage.local.get('userHistory');
-      this.userHistory = data.userHistory || {};
-    } catch {
-      this.userHistory = {};
-    }
+      const data = await chrome.storage.local.get([
+        'browsingHistory', 'actionFeedback', 'sessionStart'
+      ]);
+      this.historyQueue = data.browsingHistory || [];
+      this.actionFeedback = data.actionFeedback || {};
+      if (data.sessionStart && Date.now() - data.sessionStart < 3600000) {
+        this.sessionStart = data.sessionStart;
+      }
+    } catch { /* first run */ }
   }
 
-  async saveUserHistory() {
+  async persist() {
     try {
-      await chrome.storage.local.set({ userHistory: this.userHistory });
-    } catch {
-      // Storage write failed silently
-    }
+      await chrome.storage.local.set({
+        browsingHistory: this.historyQueue,
+        actionFeedback: this.actionFeedback,
+        sessionStart: this.sessionStart
+      });
+    } catch { /* storage write failed */ }
   }
 
-  recordAction(actionId) {
-    if (!this.userHistory[actionId]) {
-      this.userHistory[actionId] = { count: 0, lastUsed: 0 };
-    }
-    this.userHistory[actionId].count += 1;
-    this.userHistory[actionId].lastUsed = Date.now();
-    this.saveUserHistory();
-  }
-
-  // --- Main scoring function ---
-  calculateRelevanceScore(action, context) {
-    const scores = {
-      pageTypeMatch: this.scorePageType(action, context),
-      scenarioFit: this.scoreScenarioFit(action, context),
-      userBehavior: this.scoreUserBehavior(action, context),
-      urlFeature: this.scoreUrlFeature(action, context),
-      timeFactor: this.scoreTimeFactor(action, context)
+  recordPageVisit(context) {
+    const entry = {
+      url: context.url,
+      title: context.title,
+      pageType: context.pageType,
+      timestamp: Date.now(),
+      dwellTime: context.behaviorSignals?.dwellTime || 0
     };
-
-    // Weighted sum: pageType(40) + scenario(30) + behavior(15) + url(10) + time(5)
-    const total =
-      scores.pageTypeMatch * 40 +
-      scores.scenarioFit * 30 +
-      scores.userBehavior * 15 +
-      scores.urlFeature * 10 +
-      scores.timeFactor * 5;
-
-    return { total: Math.min(100, Math.max(0, total)), breakdown: scores };
-  }
-
-  // Dimension 1: Page Type Match (weight: 40)
-  scorePageType(action, context) {
-    if (action.pageTypes.includes('any')) return 0.55;
-
-    const pageType = context.pageType || 'unknown';
-    if (action.pageTypes.includes(pageType)) return 1.0;
-
-    // Partial matches via semantic proximity map
-    const proximity = {
-      video: { article: 0.2, news: 0.15, social: 0.25 },
-      shopping: { product: 0.9, social: 0.1 },
-      code: { documentation: 0.7, article: 0.3 },
-      article: { news: 0.8, blog: 0.85, documentation: 0.5 },
-      news: { article: 0.8, blog: 0.6, social: 0.4 },
-      blog: { article: 0.85, news: 0.5 },
-      documentation: { code: 0.6, article: 0.4 },
-      social: { news: 0.3, article: 0.2 },
-      product: { shopping: 0.9 }
-    };
-
-    for (const supportedType of action.pageTypes) {
-      const sim = proximity[supportedType]?.[pageType] ?? 0;
-      if (sim > 0) return sim;
+    this.historyQueue.push(entry);
+    if (this.historyQueue.length > this.maxHistory) {
+      this.historyQueue.shift();
     }
-    return 0.05;
+    this.persist();
   }
 
-  // Dimension 2: Scenario Fit (weight: 30)
-  scoreScenarioFit(action, context) {
-    const contextSignals = this.extractScenarioSignals(context);
-    if (contextSignals.length === 0) return action.baseRelevance * 0.5;
+  recordActionUsed(actionId) {
+    if (!this.actionFeedback[actionId]) {
+      this.actionFeedback[actionId] = { used: 0, ignored: 0, lastUsed: 0 };
+    }
+    this.actionFeedback[actionId].used += 1;
+    this.actionFeedback[actionId].lastUsed = Date.now();
+    this.persist();
+  }
 
-    let matchScore = 0;
-    let matchCount = 0;
-    for (const tag of action.scenarioTags) {
-      for (const signal of contextSignals) {
-        const similarity = this.tagSimilarity(tag, signal);
-        if (similarity > 0.3) {
-          matchScore += similarity;
-          matchCount++;
-        }
+  recordActionIgnored(actionIds) {
+    for (const id of actionIds) {
+      if (!this.actionFeedback[id]) {
+        this.actionFeedback[id] = { used: 0, ignored: 0, lastUsed: 0 };
       }
+      this.actionFeedback[id].ignored += 1;
     }
-
-    if (matchCount === 0) return action.baseRelevance * 0.3;
-
-    const avgMatch = matchScore / Math.max(matchCount, 1);
-    const coverage = matchCount / action.scenarioTags.length;
-    return Math.min(1.0, avgMatch * 0.6 + coverage * 0.4) * action.baseRelevance;
+    this.persist();
   }
 
-  extractScenarioSignals(context) {
-    const signals = [];
-    const text = ((context.title || '') + ' ' + (context.content || '') + ' ' + (context.selectedText || '')).toLowerCase();
-
-    const signalMap = {
-      learning: ['tutorial', 'learn', 'course', 'lecture', 'lesson', 'guide', 'how to', 'explained'],
-      entertainment: ['funny', 'music', 'movie', 'trailer', 'game', 'clip', 'vlog'],
-      research: ['study', 'paper', 'analysis', 'research', 'review', 'survey', 'report'],
-      shopping: ['buy', 'price', 'deal', 'sale', 'discount', 'offer', 'cart', 'shipping', 'add to cart'],
-      development: ['code', 'function', 'class', 'api', 'bug', 'fix', 'pull request', 'commit', 'repository'],
-      reading: ['article', 'story', 'opinion', 'essay', 'blog', 'post'],
-      news: ['breaking', 'update', 'latest', 'report', 'announced', 'statement'],
-      productivity: ['schedule', 'plan', 'task', 'deadline', 'organize', 'manage'],
-      language: ['translation', 'translate', 'foreign', 'language', 'español', 'français', 'deutsch', '中文', '日本語'],
-      debugging: ['error', 'bug', 'issue', 'fix', 'stack trace', 'exception', 'debug'],
-      optimization: ['performance', 'optimize', 'speed', 'efficiency', 'refactor', 'improve'],
-      social: ['comment', 'reply', 'share', 'like', 'follow', 'post', 'thread'],
-      analysis: ['data', 'chart', 'statistics', 'trend', 'metric', 'insight'],
-      savings: ['coupon', 'cashback', 'save', 'cheap', 'lowest', 'best price'],
-      comparison: ['compare', 'vs', 'versus', 'better', 'alternative', 'similar']
-    };
-
-    for (const [signal, keywords] of Object.entries(signalMap)) {
-      for (const kw of keywords) {
-        if (text.includes(kw)) {
-          signals.push(signal);
-          break;
-        }
-      }
-    }
-
-    return [...new Set(signals)];
+  getSessionDuration() {
+    return Math.round((Date.now() - this.sessionStart) / 60000); // minutes
   }
 
-  tagSimilarity(tag, signal) {
-    if (tag === signal) return 1.0;
+  getBrowsingPattern() {
+    if (this.historyQueue.length < 2) return 'single_page';
+    const recent = this.historyQueue.slice(-5);
+    const domains = new Set(recent.map(e => {
+      try { return new URL(e.url).hostname; } catch { return ''; }
+    }));
+    const types = new Set(recent.map(e => e.pageType));
 
-    const similarityMap = {
-      learning: { research: 0.7, development: 0.6, reading: 0.5 },
-      entertainment: { social: 0.5 },
-      research: { learning: 0.7, analysis: 0.8, reading: 0.6 },
-      shopping: { savings: 0.85, comparison: 0.8 },
-      development: { debugging: 0.8, optimization: 0.7, learning: 0.5 },
-      reading: { research: 0.6, news: 0.7, learning: 0.4 },
-      news: { reading: 0.7, social: 0.4, analysis: 0.5 },
-      productivity: { planning: 0.8 },
-      language: { reading: 0.3 },
-      debugging: { development: 0.8, optimization: 0.5 },
-      optimization: { development: 0.7, debugging: 0.4 },
-      social: { entertainment: 0.4, news: 0.3 },
-      analysis: { research: 0.8, news: 0.4, comparison: 0.6 },
-      savings: { shopping: 0.85, comparison: 0.7 },
-      comparison: { shopping: 0.8, savings: 0.7, analysis: 0.5 },
-      deals: { shopping: 0.9, savings: 0.9 },
-      bookmarking: { productivity: 0.6, reading: 0.5 },
-      accessibility: { language: 0.6 },
-      international: { language: 0.8 },
-      exploration: { research: 0.7, learning: 0.5 },
-      refactoring: { optimization: 0.9, development: 0.7 },
-      study: { learning: 0.9, research: 0.8 }
-    };
-
-    return similarityMap[tag]?.[signal] ?? similarityMap[signal]?.[tag] ?? 0;
+    if (domains.size === 1) return 'deep_dive';      // same site
+    if (types.size === 1) return 'topic_research';    // same type across sites
+    if (recent.every(e => e.dwellTime < 15)) return 'rapid_browsing';
+    return 'mixed_browsing';
   }
 
-  // Dimension 3: User Behavior (weight: 15)
-  scoreUserBehavior(action, context) {
-    const history = this.userHistory[action.id];
-    if (!history) return 0.5; // Neutral for new actions
-
-    const usageFrequency = Math.min(history.count / 20, 1.0);
-    const recencyMs = Date.now() - history.lastUsed;
-    const recencyDays = recencyMs / (1000 * 60 * 60 * 24);
-    const recencyScore = Math.max(0, 1.0 - recencyDays / 30);
-
-    // Has selection context? Boost text-related actions
-    let selectionBoost = 0;
-    if (context.selectedText && context.selectedText.length > 0) {
-      const textActions = ['translate_page', 'explain_code', 'smart_summary', 'extract_keypoints'];
-      if (textActions.includes(action.id)) {
-        selectionBoost = 0.3;
-      }
-    }
-
-    return Math.min(1.0, usageFrequency * 0.4 + recencyScore * 0.3 + 0.3 + selectionBoost);
-  }
-
-  // Dimension 4: URL Feature (weight: 10)
-  scoreUrlFeature(action, context) {
-    const url = (context.url || '').toLowerCase();
-    if (!url) return 0.2;
-
-    // Direct URL pattern match
-    for (const pattern of action.urlPatterns) {
-      if (url.includes(pattern)) return 1.0;
-    }
-
-    // Partial domain heuristics
-    const domainHints = {
-      video: ['video', 'watch', 'stream', 'tv', 'media'],
-      shopping: ['shop', 'store', 'buy', 'product', 'cart', 'checkout'],
-      code: ['code', 'repo', 'git', 'dev', 'api', 'docs'],
-      article: ['blog', 'post', 'article', 'news', 'story', 'read'],
-      social: ['social', 'feed', 'profile', 'tweet', 'status']
-    };
-
-    for (const pageType of action.pageTypes) {
-      const hints = domainHints[pageType] || [];
-      for (const hint of hints) {
-        if (url.includes(hint)) return 0.6;
-      }
-    }
-
-    if (action.pageTypes.includes('any')) return 0.4;
-    return 0.1;
-  }
-
-  // Dimension 5: Time Factor (weight: 5)
-  scoreTimeFactor(action, context) {
-    const hour = new Date().getHours();
-    let period;
-    if (hour >= 6 && hour < 12) period = 'morning';
-    else if (hour >= 12 && hour < 18) period = 'afternoon';
-    else if (hour >= 18 && hour < 22) period = 'evening';
-    else period = 'night';
-
-    const weight = action.timeWeight[period] || 1.0;
-    return Math.min(1.0, weight * 0.8);
-  }
-
-  // --- Generate Top-3 Recommendations ---
-  recommend(context) {
-    const scored = this.actions.map(action => {
-      const { total, breakdown } = this.calculateRelevanceScore(action, context);
-      return {
-        ...action,
-        score: Math.round(total),
-        confidence: Math.round(total),
-        breakdown,
-        reason: this.generateReason(action, context, breakdown)
-      };
-    });
-
-    scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, 3).map((item, index) => ({
-      rank: index + 1,
-      id: item.id,
-      name: item.name,
-      icon: item.icon,
-      description: item.description,
-      score: item.score,
-      confidence: item.confidence,
-      reason: item.reason,
-      breakdown: item.breakdown
+  getRecentHistorySummary() {
+    return this.historyQueue.slice(-8).map(e => ({
+      title: (e.title || '').substring(0, 80),
+      type: e.pageType,
+      minutesAgo: Math.round((Date.now() - e.timestamp) / 60000)
     }));
   }
 
-  generateReason(action, context, breakdown) {
-    const parts = [];
-
-    if (breakdown.pageTypeMatch >= 0.8) {
-      parts.push(`Detected ${context.pageType || 'matching'} page type`);
-    } else if (breakdown.pageTypeMatch >= 0.5) {
-      parts.push(`Partially matches ${context.pageType || 'current'} page`);
+  getUserPreferences() {
+    const prefs = {};
+    for (const [id, data] of Object.entries(this.actionFeedback)) {
+      const ratio = data.used / Math.max(data.used + data.ignored, 1);
+      if (data.used >= 2) prefs[id] = { useCount: data.used, preference: ratio };
     }
+    return prefs;
+  }
+}
 
-    if (breakdown.scenarioFit >= 0.6) {
-      parts.push('High scenario relevance');
+// ---------------------------------------------------------------------------
+// 2. PrivacyFilter — Remove sensitive data before sending to LLM
+// ---------------------------------------------------------------------------
+class PrivacyFilter {
+  constructor() {
+    this.sensitivePatterns = [
+      /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/g,              // credit card
+      /\b\d{3}-\d{2}-\d{4}\b/g,                                      // SSN
+      /\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z]{2,}\b/gi,         // email
+      /\b(?:password|passwd|pwd|secret|token|apikey|api_key)\s*[:=]\s*\S+/gi, // credentials
+      /\bbearer\s+[A-Za-z0-9\-._~+\/]+=*/gi,                        // bearer tokens
+      /\b(?:sk-|pk_live_|pk_test_|rk_live_|rk_test_)[A-Za-z0-9]+/g, // API keys
+      /\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g,                   // IP addresses
+      /\+?\d{1,3}[-.\s]?\(?\d{2,3}\)?[-.\s]?\d{3,4}[-.\s]?\d{4}\b/g // phone numbers
+    ];
+  }
+
+  sanitize(text) {
+    if (!text) return '';
+    let clean = text;
+    for (const pattern of this.sensitivePatterns) {
+      clean = clean.replace(pattern, '[REDACTED]');
     }
+    return clean;
+  }
 
-    if (breakdown.urlFeature >= 0.8) {
-      const domain = this.extractDomain(context.url);
-      parts.push(`Recognized site: ${domain}`);
+  sanitizeContext(context) {
+    return {
+      url: context.url, // URL is needed for page type understanding
+      title: this.sanitize(context.title),
+      pageType: context.pageType,
+      content: this.sanitize((context.content || '').substring(0, 1500)),
+      selectedText: this.sanitize((context.selectedText || '').substring(0, 500)),
+      metaDescription: this.sanitize((context.metaDescription || '').substring(0, 300)),
+      metaKeywords: context.metaKeywords || '',
+      ogType: context.ogType || '',
+      structuralFeatures: context.structuralFeatures || {},
+      behaviorSignals: context.behaviorSignals || {},
+      // Don't send raw HTML or full DOM
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3. PromptBuilder — Build structured prompts for the LLM
+// ---------------------------------------------------------------------------
+class PromptBuilder {
+  constructor(contextManager) {
+    this.contextManager = contextManager;
+  }
+
+  buildSystemPrompt() {
+    return `You are an expert intelligent browsing assistant embedded in a Chrome extension. Your job is to deeply understand the user's current browsing context and recommend the 3 most helpful actions.
+
+## Your capabilities
+You have rich world knowledge about websites, web applications, and user workflows. You understand:
+- What different types of websites are for (video platforms, e-commerce, code repositories, news sites, documentation, social media, etc.)
+- What actions are most useful in different contexts
+- How user behavior signals (text selection, scroll depth, dwell time, browsing patterns) reveal intent
+- How browsing history reveals ongoing tasks and goals
+
+## Available actions you can recommend
+Each action has an ID. You MUST only recommend from this list:
+
+| ID | Name | Description |
+|----|------|-------------|
+| summarize_video | Summarize Video | Generate AI summary of video content |
+| find_related | Find Related Content | Search for related resources across the web |
+| set_reminder | Set Reminder | Bookmark with a timed reminder to revisit |
+| track_price | Track Price | Monitor price changes and alert on drops |
+| compare_prices | Compare Prices | Search for the same product across stores |
+| explain_code | Explain Code | AI explanation of selected or visible code |
+| optimize_code | Suggest Optimizations | Analyze code for performance improvements |
+| smart_summary | Smart Summary | Concise AI summary of the article/page |
+| extract_keypoints | Extract Key Points | Pull out main arguments, facts, and data |
+| translate_page | Translate Page | Translate page or selected text |
+| read_later | Save for Later | Save to reading list for later |
+| analyze_sentiment | Analyze Sentiment | Detect overall tone and sentiment |
+| deep_research | Deep Research | Gather comprehensive info on the topic |
+| generate_notes | Generate Study Notes | Create structured notes from the content |
+| check_facts | Fact Check | Verify claims and statistics in the content |
+
+## Response format
+You MUST respond with valid JSON only, no markdown fences, no extra text. The schema:
+
+{
+  "understanding": "1-2 sentence description of what the user is doing and likely wants",
+  "recommendations": [
+    {
+      "action_id": "one of the IDs above",
+      "name": "human-readable name",
+      "confidence": 85,
+      "reasoning": "Why this action is relevant in this specific context (be specific, reference actual page content/URL/behavior)",
+      "dimensions": {
+        "context_match": 0.9,
+        "intent_alignment": 0.8,
+        "behavioral_signal": 0.7,
+        "historical_fit": 0.6,
+        "timing_relevance": 0.8
+      }
     }
+  ]
+}
 
-    if (breakdown.userBehavior >= 0.7) {
-      parts.push('Frequently used action');
-    }
+Rules:
+- Return exactly 3 recommendations, sorted by confidence (highest first)
+- Confidence is 0-100, be calibrated (don't always give 90+)
+- Each dimension score is 0.0-1.0
+- "reasoning" must be specific to THIS page, not generic
+- If the user has selected text, strongly consider actions that work with text
+- Consider the user's browsing history and pattern to infer ongoing tasks
+- Consider the time of day for appropriateness`;
+  }
 
-    if (breakdown.timeFactor >= 0.9) {
-      parts.push('Good timing for this action');
-    }
+  buildUserPrompt(sanitizedContext, historyContext) {
+    const hour = new Date().getHours();
+    const timeLabel =
+      hour >= 6 && hour < 12 ? 'morning' :
+      hour >= 12 && hour < 18 ? 'afternoon' :
+      hour >= 18 && hour < 22 ? 'evening' : 'late night';
 
-    if (context.selectedText && context.selectedText.length > 0) {
-      const textActions = ['translate_page', 'explain_code', 'smart_summary', 'extract_keypoints'];
-      if (textActions.includes(action.id)) {
-        parts.push('Text selection detected');
+    const dayOfWeek = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][new Date().getDay()];
+    const isWeekend = [0, 6].includes(new Date().getDay());
+
+    const sections = [];
+
+    // --- Current page ---
+    sections.push(`## Current Page
+- **URL**: ${sanitizedContext.url}
+- **Title**: ${sanitizedContext.title}
+- **Detected page type**: ${sanitizedContext.pageType}
+- **Meta description**: ${sanitizedContext.metaDescription || 'N/A'}
+- **Meta keywords**: ${sanitizedContext.metaKeywords || 'N/A'}
+- **OG type**: ${sanitizedContext.ogType || 'N/A'}`);
+
+    // --- Structural features ---
+    const sf = sanitizedContext.structuralFeatures || {};
+    if (Object.keys(sf).length > 0) {
+      const featureLines = Object.entries(sf)
+        .filter(([, v]) => v)
+        .map(([k, v]) => `- ${k}: ${typeof v === 'boolean' ? 'yes' : v}`)
+        .join('\n');
+      if (featureLines) {
+        sections.push(`## Page Structure\n${featureLines}`);
       }
     }
 
-    return parts.length > 0 ? parts.join(' · ') : 'General recommendation based on context';
+    // --- Content excerpt ---
+    if (sanitizedContext.content) {
+      sections.push(`## Content Excerpt (first ~1500 chars)\n${sanitizedContext.content}`);
+    }
+
+    // --- Selected text ---
+    if (sanitizedContext.selectedText) {
+      sections.push(`## User Selected Text\n"${sanitizedContext.selectedText}"`);
+    }
+
+    // --- Behavior signals ---
+    const bs = sanitizedContext.behaviorSignals || {};
+    if (Object.keys(bs).length > 0) {
+      sections.push(`## User Behavior Signals
+- Dwell time on page: ${bs.dwellTime || 0} seconds
+- Scroll depth: ${bs.scrollDepth || 0}%
+- Interaction level: ${bs.interactionLevel || 'unknown'}
+- Has text selection: ${bs.hasSelection ? 'yes' : 'no'}
+- Focused element type: ${bs.focusedElementType || 'none'}`);
+    }
+
+    // --- Browsing history ---
+    const history = historyContext.recentHistory || [];
+    if (history.length > 0) {
+      const historyLines = history.map(h =>
+        `- [${h.minutesAgo}min ago] (${h.type}) ${h.title}`
+      ).join('\n');
+      sections.push(`## Recent Browsing History\n${historyLines}`);
+    }
+
+    // --- Session & pattern ---
+    sections.push(`## Session Context
+- Browsing pattern: ${historyContext.browsingPattern}
+- Session duration: ${historyContext.sessionDuration} minutes
+- Time: ${timeLabel} (${hour}:00), ${dayOfWeek}${isWeekend ? ' (weekend)' : ' (weekday)'}`);
+
+    // --- User preferences ---
+    const prefs = historyContext.userPreferences || {};
+    if (Object.keys(prefs).length > 0) {
+      const prefLines = Object.entries(prefs)
+        .sort((a, b) => b[1].useCount - a[1].useCount)
+        .slice(0, 5)
+        .map(([id, p]) => `- ${id}: used ${p.useCount} times (preference: ${Math.round(p.preference * 100)}%)`)
+        .join('\n');
+      sections.push(`## User Action Preferences\n${prefLines}`);
+    }
+
+    sections.push(`\nBased on all of the above, recommend the 3 most helpful actions for this user right now. Remember to respond with valid JSON only.`);
+
+    return sections.join('\n\n');
+  }
+
+  buildIncrementalPrompt(previousRecommendations, newSignals) {
+    return `The user is still on the same page. Previously you recommended:
+${JSON.stringify(previousRecommendations, null, 2)}
+
+New signals have appeared:
+${JSON.stringify(newSignals, null, 2)}
+
+Based on these new signals, should the recommendations change? Respond with the same JSON format. If no change is needed, return the same recommendations with the same scores.`;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 4. CacheLayer — LRU cache for AI responses
+// ---------------------------------------------------------------------------
+class CacheLayer {
+  constructor(maxSize = 50) {
+    this.maxSize = maxSize;
+    this.cache = new Map(); // key → { result, timestamp, hitCount }
+  }
+
+  generateKey(context) {
+    // Cache key: domain + pageType + hasSelection + contentHash
+    const domain = this.extractDomain(context.url);
+    const contentSample = (context.content || '').substring(0, 200);
+    const hash = this.simpleHash(contentSample);
+    return `${domain}::${context.pageType}::${context.selectedText ? 'sel' : 'no'}::${hash}`;
+  }
+
+  get(key) {
+    const entry = this.cache.get(key);
+    if (!entry) return null;
+
+    // Expire after 10 minutes
+    if (Date.now() - entry.timestamp > 600000) {
+      this.cache.delete(key);
+      return null;
+    }
+
+    entry.hitCount++;
+    // Move to end (most recent)
+    this.cache.delete(key);
+    this.cache.set(key, entry);
+    return entry.result;
+  }
+
+  set(key, result) {
+    if (this.cache.size >= this.maxSize) {
+      // Evict oldest (first entry)
+      const firstKey = this.cache.keys().next().value;
+      this.cache.delete(firstKey);
+    }
+    this.cache.set(key, { result, timestamp: Date.now(), hitCount: 0 });
+  }
+
+  invalidateForDomain(domain) {
+    for (const [key] of this.cache) {
+      if (key.startsWith(domain + '::')) {
+        this.cache.delete(key);
+      }
+    }
   }
 
   extractDomain(url) {
-    try {
-      return new URL(url).hostname.replace('www.', '');
-    } catch {
-      return 'unknown';
+    try { return new URL(url).hostname.replace('www.', ''); }
+    catch { return 'unknown'; }
+  }
+
+  simpleHash(str) {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash |= 0;
     }
+    return Math.abs(hash).toString(36);
   }
 }
 
 // ---------------------------------------------------------------------------
-// ActionExecutor - Execute recommended actions (simulated for now)
+// 5. AIEngine — Calls Anthropic Claude API
+// ---------------------------------------------------------------------------
+class AIEngine {
+  constructor(contextManager) {
+    this.contextManager = contextManager;
+    this.privacyFilter = new PrivacyFilter();
+    this.promptBuilder = new PromptBuilder(contextManager);
+    this.cache = new CacheLayer(50);
+    this.apiKey = null;
+    this.model = 'claude-sonnet-4-20250514';
+    this.maxTokens = 1024;
+    this.loadSettings();
+  }
+
+  async loadSettings() {
+    try {
+      const data = await chrome.storage.local.get(['apiKey', 'aiModel']);
+      this.apiKey = data.apiKey || null;
+      if (data.aiModel) this.model = data.aiModel;
+    } catch { /* first run */ }
+  }
+
+  async setApiKey(key) {
+    this.apiKey = key;
+    await chrome.storage.local.set({ apiKey: key });
+  }
+
+  async setModel(model) {
+    this.model = model;
+    await chrome.storage.local.set({ aiModel: model });
+  }
+
+  isConfigured() {
+    return !!this.apiKey;
+  }
+
+  async recommend(context) {
+    // Sanitize context
+    const sanitized = this.privacyFilter.sanitizeContext(context);
+
+    // Check cache
+    const cacheKey = this.cache.generateKey(sanitized);
+    const cached = this.cache.get(cacheKey);
+    if (cached) {
+      return { ...cached, source: 'cache' };
+    }
+
+    // Build history context
+    const historyContext = {
+      recentHistory: this.contextManager.getRecentHistorySummary(),
+      browsingPattern: this.contextManager.getBrowsingPattern(),
+      sessionDuration: this.contextManager.getSessionDuration(),
+      userPreferences: this.contextManager.getUserPreferences()
+    };
+
+    // Build prompts
+    const systemPrompt = this.promptBuilder.buildSystemPrompt();
+    const userPrompt = this.promptBuilder.buildUserPrompt(sanitized, historyContext);
+
+    // Call API
+    const result = await this.callClaude(systemPrompt, userPrompt);
+
+    // Cache result
+    this.cache.set(cacheKey, result);
+
+    // Record page visit
+    this.contextManager.recordPageVisit(context);
+
+    return { ...result, source: 'ai' };
+  }
+
+  async recommendIncremental(previousRecs, newSignals) {
+    const systemPrompt = this.promptBuilder.buildSystemPrompt();
+    const userPrompt = this.promptBuilder.buildIncrementalPrompt(previousRecs, newSignals);
+    return await this.callClaude(systemPrompt, userPrompt);
+  }
+
+  async callClaude(systemPrompt, userPrompt) {
+    if (!this.apiKey) {
+      throw new Error('API_KEY_MISSING');
+    }
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': this.apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: this.model,
+        max_tokens: this.maxTokens,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }]
+      })
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      if (response.status === 401) throw new Error('API_KEY_INVALID');
+      if (response.status === 429) throw new Error('RATE_LIMITED');
+      if (response.status === 529) throw new Error('API_OVERLOADED');
+      throw new Error(`API_ERROR: ${response.status} ${errBody.substring(0, 200)}`);
+    }
+
+    const data = await response.json();
+    const text = data.content?.[0]?.text || '';
+
+    // Parse JSON from response — handle possible markdown fences
+    const jsonStr = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
+    let parsed;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      throw new Error('PARSE_ERROR: AI returned invalid JSON');
+    }
+
+    // Validate structure
+    if (!parsed.recommendations || !Array.isArray(parsed.recommendations)) {
+      throw new Error('PARSE_ERROR: Missing recommendations array');
+    }
+
+    // Normalize and validate each recommendation
+    const validActionIds = new Set([
+      'summarize_video', 'find_related', 'set_reminder',
+      'track_price', 'compare_prices', 'explain_code', 'optimize_code',
+      'smart_summary', 'extract_keypoints', 'translate_page',
+      'read_later', 'analyze_sentiment', 'deep_research',
+      'generate_notes', 'check_facts'
+    ]);
+
+    const ACTION_META = {
+      summarize_video: { icon: '📝', name: 'Summarize Video' },
+      find_related: { icon: '🔍', name: 'Find Related Content' },
+      set_reminder: { icon: '⏰', name: 'Set Reminder' },
+      track_price: { icon: '💰', name: 'Track Price' },
+      compare_prices: { icon: '📊', name: 'Compare Prices' },
+      explain_code: { icon: '💡', name: 'Explain Code' },
+      optimize_code: { icon: '⚡', name: 'Suggest Optimizations' },
+      smart_summary: { icon: '📰', name: 'Smart Summary' },
+      extract_keypoints: { icon: '🎯', name: 'Extract Key Points' },
+      translate_page: { icon: '🌐', name: 'Translate Page' },
+      read_later: { icon: '📌', name: 'Save for Later' },
+      analyze_sentiment: { icon: '🧠', name: 'Analyze Sentiment' },
+      deep_research: { icon: '🔬', name: 'Deep Research' },
+      generate_notes: { icon: '📒', name: 'Generate Study Notes' },
+      check_facts: { icon: '✅', name: 'Fact Check' }
+    };
+
+    const recommendations = parsed.recommendations
+      .filter(r => validActionIds.has(r.action_id))
+      .slice(0, 3)
+      .map((r, i) => {
+        const meta = ACTION_META[r.action_id] || { icon: '•', name: r.name || r.action_id };
+        const dims = r.dimensions || {};
+        return {
+          rank: i + 1,
+          id: r.action_id,
+          name: meta.name,
+          icon: meta.icon,
+          confidence: Math.max(0, Math.min(100, Math.round(r.confidence || 50))),
+          reasoning: r.reasoning || 'AI recommendation',
+          dimensions: {
+            context_match: clamp(dims.context_match ?? 0.5),
+            intent_alignment: clamp(dims.intent_alignment ?? 0.5),
+            behavioral_signal: clamp(dims.behavioral_signal ?? 0.5),
+            historical_fit: clamp(dims.historical_fit ?? 0.5),
+            timing_relevance: clamp(dims.timing_relevance ?? 0.5)
+          }
+        };
+      });
+
+    return {
+      understanding: parsed.understanding || '',
+      recommendations
+    };
+  }
+}
+
+function clamp(v) {
+  return Math.max(0, Math.min(1, Number(v) || 0));
+}
+
+// ---------------------------------------------------------------------------
+// 6. RuleBasedFallback — Deterministic fallback engine
+// ---------------------------------------------------------------------------
+class RuleBasedFallback {
+  recommend(context) {
+    const url = (context.url || '').toLowerCase();
+    const pageType = context.pageType || 'general';
+    const hasSelection = !!(context.selectedText && context.selectedText.length > 0);
+
+    const strategies = {
+      video: [
+        { id: 'summarize_video', icon: '📝', name: 'Summarize Video', confidence: 82, reasoning: 'Video page detected — a summary can save viewing time' },
+        { id: 'find_related', icon: '🔍', name: 'Find Related Content', confidence: 68, reasoning: 'Find deeper resources related to this video topic' },
+        { id: 'set_reminder', icon: '⏰', name: 'Set Reminder', confidence: 52, reasoning: 'Save this video for later viewing' }
+      ],
+      shopping: [
+        { id: 'track_price', icon: '💰', name: 'Track Price', confidence: 88, reasoning: 'Product page detected — monitor for price drops' },
+        { id: 'compare_prices', icon: '📊', name: 'Compare Prices', confidence: 78, reasoning: 'Check if this product is cheaper elsewhere' },
+        { id: 'read_later', icon: '📌', name: 'Save for Later', confidence: 45, reasoning: 'Bookmark this product for future consideration' }
+      ],
+      code: [
+        { id: 'explain_code', icon: '💡', name: 'Explain Code', confidence: 85, reasoning: 'Code repository detected — get AI explanation of the code' },
+        { id: 'optimize_code', icon: '⚡', name: 'Suggest Optimizations', confidence: 70, reasoning: 'Analyze this code for potential improvements' },
+        { id: 'find_related', icon: '🔍', name: 'Find Related Content', confidence: 55, reasoning: 'Find related documentation or examples' }
+      ],
+      documentation: [
+        { id: 'extract_keypoints', icon: '🎯', name: 'Extract Key Points', confidence: 80, reasoning: 'Documentation page — extract the essential information' },
+        { id: 'generate_notes', icon: '📒', name: 'Generate Study Notes', confidence: 72, reasoning: 'Create structured notes for reference' },
+        { id: 'smart_summary', icon: '📰', name: 'Smart Summary', confidence: 65, reasoning: 'Get a concise overview of this documentation' }
+      ],
+      news: [
+        { id: 'smart_summary', icon: '📰', name: 'Smart Summary', confidence: 84, reasoning: 'News article detected — get a quick summary' },
+        { id: 'extract_keypoints', icon: '🎯', name: 'Extract Key Points', confidence: 75, reasoning: 'Pull out the key facts and data' },
+        { id: 'check_facts', icon: '✅', name: 'Fact Check', confidence: 62, reasoning: 'Verify claims made in this article' }
+      ],
+      article: [
+        { id: 'smart_summary', icon: '📰', name: 'Smart Summary', confidence: 82, reasoning: 'Article detected — summarize the main points' },
+        { id: 'extract_keypoints', icon: '🎯', name: 'Extract Key Points', confidence: 74, reasoning: 'Extract the key arguments and evidence' },
+        { id: 'read_later', icon: '📌', name: 'Save for Later', confidence: 50, reasoning: 'Save this article to your reading list' }
+      ],
+      social: [
+        { id: 'analyze_sentiment', icon: '🧠', name: 'Analyze Sentiment', confidence: 72, reasoning: 'Social media page — understand the overall tone' },
+        { id: 'smart_summary', icon: '📰', name: 'Smart Summary', confidence: 65, reasoning: 'Summarize the discussion thread' },
+        { id: 'translate_page', icon: '🌐', name: 'Translate Page', confidence: 48, reasoning: 'Translate content if needed' }
+      ]
+    };
+
+    let recs = strategies[pageType] || [
+      { id: 'smart_summary', icon: '📰', name: 'Smart Summary', confidence: 60, reasoning: 'Get a summary of this page content' },
+      { id: 'translate_page', icon: '🌐', name: 'Translate Page', confidence: 50, reasoning: 'Translate this page if in a foreign language' },
+      { id: 'read_later', icon: '📌', name: 'Save for Later', confidence: 42, reasoning: 'Bookmark for later reading' }
+    ];
+
+    // Boost text-related actions if there's a selection
+    if (hasSelection) {
+      const textActions = ['translate_page', 'explain_code', 'smart_summary', 'extract_keypoints'];
+      recs = recs.map(r => {
+        if (textActions.includes(r.id)) {
+          return { ...r, confidence: Math.min(95, r.confidence + 15), reasoning: r.reasoning + ' (text selected)' };
+        }
+        return r;
+      });
+      recs.sort((a, b) => b.confidence - a.confidence);
+    }
+
+    return {
+      understanding: `Rule-based analysis: ${pageType} page detected at ${url.substring(0, 60)}`,
+      recommendations: recs.slice(0, 3).map((r, i) => ({
+        rank: i + 1,
+        id: r.id,
+        name: r.name,
+        icon: r.icon,
+        confidence: r.confidence,
+        reasoning: r.reasoning,
+        dimensions: {
+          context_match: r.confidence / 100,
+          intent_alignment: r.confidence / 120,
+          behavioral_signal: 0.5,
+          historical_fit: 0.5,
+          timing_relevance: 0.5
+        }
+      })),
+      source: 'fallback'
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 7. ActionExecutor — Execute recommended actions
 // ---------------------------------------------------------------------------
 class ActionExecutor {
+  constructor(aiEngine) {
+    this.aiEngine = aiEngine;
+  }
+
   async execute(actionId, context) {
-    const handlers = {
-      summarize_video: () => this.simulateSummarize(context, 'video'),
-      find_related: () => this.simulateFindRelated(context),
-      set_reminder: () => this.simulateSetReminder(context),
-      track_price: () => this.simulateTrackPrice(context),
-      compare_prices: () => this.simulateComparePrices(context),
-      explain_code: () => this.simulateExplainCode(context),
-      optimize_code: () => this.simulateOptimizeCode(context),
-      smart_summary: () => this.simulateSummarize(context, 'article'),
-      extract_keypoints: () => this.simulateKeypoints(context),
-      translate_page: () => this.simulateTranslate(context),
-      read_later: () => this.simulateReadLater(context),
-      analyze_sentiment: () => this.simulateAnalyzeSentiment(context)
-    };
+    // Actions that can leverage the LLM
+    const aiPoweredActions = new Set([
+      'summarize_video', 'smart_summary', 'explain_code', 'optimize_code',
+      'extract_keypoints', 'translate_page', 'analyze_sentiment',
+      'deep_research', 'generate_notes', 'check_facts'
+    ]);
 
-    const handler = handlers[actionId];
-    if (!handler) return { success: false, message: 'Unknown action' };
+    if (aiPoweredActions.has(actionId) && this.aiEngine.isConfigured()) {
+      return this.executeWithAI(actionId, context);
+    }
 
-    return handler();
+    return this.executeLocally(actionId, context);
   }
 
-  simulateSummarize(context, type) {
-    const title = context.title || 'this content';
-    return {
-      success: true,
-      type: 'summary',
-      title: `Summary: ${title}`,
-      content: type === 'video'
-        ? `📹 **Video Summary**\n\nThis video covers the main topics discussed in "${title}". Key themes include the introduction of core concepts, practical demonstrations, and concluding insights.\n\n*AI-generated summary — full analysis requires API integration.*`
-        : `📄 **Article Summary**\n\nThis article "${title}" presents a comprehensive overview of its subject matter. The author discusses multiple perspectives, provides supporting evidence, and draws actionable conclusions.\n\n*AI-generated summary — full analysis requires API integration.*`
+  async executeWithAI(actionId, context) {
+    const privacyFilter = new PrivacyFilter();
+    const sanitized = privacyFilter.sanitizeContext(context);
+    const content = sanitized.selectedText || sanitized.content || sanitized.title;
+
+    const taskPrompts = {
+      summarize_video: `Summarize the following video page content concisely. Include main topics, key points, and takeaways.\n\nTitle: ${sanitized.title}\nContent: ${content}`,
+      smart_summary: `Write a concise summary of this article/page. Focus on the main thesis, supporting arguments, and conclusions.\n\nTitle: ${sanitized.title}\nContent: ${content}`,
+      explain_code: `Explain the following code clearly. Describe what it does, how it works, and any notable patterns or potential issues.\n\nCode/Content:\n${content}`,
+      optimize_code: `Analyze this code and suggest specific optimizations for performance, readability, and best practices.\n\nCode/Content:\n${content}`,
+      extract_keypoints: `Extract the key points from this content as a structured bullet list. Include main arguments, data points, and conclusions.\n\nTitle: ${sanitized.title}\nContent: ${content}`,
+      translate_page: `Translate the following text to English (or if already in English, to Chinese). Preserve formatting.\n\nText: ${content}`,
+      analyze_sentiment: `Analyze the sentiment and tone of this content. Rate objectivity, emotional intensity, and identify the predominant emotions.\n\nTitle: ${sanitized.title}\nContent: ${content}`,
+      deep_research: `Based on this page, provide a comprehensive research briefing. Include background context, related topics to explore, and key questions to investigate further.\n\nTitle: ${sanitized.title}\nURL: ${sanitized.url}\nContent: ${content}`,
+      generate_notes: `Generate structured study notes from this content. Use headers, bullet points, and highlight key definitions and concepts.\n\nTitle: ${sanitized.title}\nContent: ${content}`,
+      check_facts: `Identify the main factual claims in this content and assess their verifiability. Note which claims would benefit from additional verification.\n\nTitle: ${sanitized.title}\nContent: ${content}`
     };
+
+    const taskPrompt = taskPrompts[actionId];
+    if (!taskPrompt) return this.executeLocally(actionId, context);
+
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.aiEngine.apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: this.aiEngine.model,
+          max_tokens: 1500,
+          messages: [{ role: 'user', content: taskPrompt }]
+        })
+      });
+
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      const data = await response.json();
+      const result = data.content?.[0]?.text || 'No response from AI.';
+
+      const ACTION_TITLES = {
+        summarize_video: '📝 Video Summary',
+        smart_summary: '📰 Smart Summary',
+        explain_code: '💡 Code Explanation',
+        optimize_code: '⚡ Optimization Suggestions',
+        extract_keypoints: '🎯 Key Points',
+        translate_page: '🌐 Translation',
+        analyze_sentiment: '🧠 Sentiment Analysis',
+        deep_research: '🔬 Deep Research',
+        generate_notes: '📒 Study Notes',
+        check_facts: '✅ Fact Check'
+      };
+
+      return {
+        success: true,
+        type: actionId,
+        title: ACTION_TITLES[actionId] || 'AI Result',
+        content: result,
+        source: 'ai'
+      };
+    } catch (err) {
+      // Fallback to local execution on AI failure
+      const local = this.executeLocally(actionId, context);
+      local.content += '\n\n⚠️ AI analysis unavailable. Showing placeholder result.';
+      return local;
+    }
   }
 
-  simulateFindRelated(context) {
-    return {
-      success: true,
-      type: 'related',
-      title: 'Related Content',
-      content: `🔍 **Related to: "${context.title || 'Current Page'}"**\n\n1. Similar content from verified sources\n2. Community discussions and threads\n3. Expert analysis and reviews\n\n*Results would be populated via search API integration.*`
-    };
-  }
+  executeLocally(actionId, context) {
+    const title = context.title || 'this page';
+    const url = context.url || '';
+    const selectedText = context.selectedText || '';
 
-  simulateSetReminder(context) {
-    return {
-      success: true,
-      type: 'reminder',
-      title: 'Reminder Set',
-      content: `⏰ **Reminder Created**\n\nYou'll be reminded about: "${context.title || 'this page'}"\nScheduled for: Tomorrow at 9:00 AM\n\n*Reminder functionality requires alarm API setup.*`
+    const actions = {
+      summarize_video: {
+        title: '📝 Video Summary',
+        content: `**Video**: "${title}"\n\nAI-powered summary requires API configuration. Configure your Anthropic API key in the extension settings to enable this feature.\n\nThe AI will analyze the video page content and generate a concise summary with key topics and takeaways.`
+      },
+      find_related: {
+        title: '🔍 Related Content',
+        content: `**Related to**: "${title}"\n\nSearching for related content across the web...\n\n• Similar resources from verified sources\n• Community discussions and analyses\n• Expert reviews and deep dives\n\n*Full search integration coming soon.*`
+      },
+      set_reminder: {
+        title: '⏰ Reminder Set',
+        content: `**Reminder created for**: "${title}"\n\nURL: ${url}\nScheduled: Tomorrow at 9:00 AM\n\n*You'll receive a notification to revisit this page.*`
+      },
+      track_price: {
+        title: '💰 Price Tracking Active',
+        content: `**Now tracking**: "${title}"\n\nURL: ${url}\nAlert threshold: 10% price drop\n\n*You'll be notified when the price changes significantly.*`
+      },
+      compare_prices: {
+        title: '📊 Price Comparison',
+        content: `**Comparing prices for**: "${title}"\n\nSearching across major retailers...\n\n*Full price comparison requires retailer API integration.*`
+      },
+      explain_code: {
+        title: '💡 Code Explanation',
+        content: selectedText
+          ? `**Analyzing selected code:**\n\n\`\`\`\n${selectedText.substring(0, 300)}\n\`\`\`\n\nConfigure your API key for AI-powered code explanation.`
+          : `**Code page detected**: "${title}"\n\nSelect specific code and reopen the sidebar for targeted explanation, or configure your API key for full AI analysis.`
+      },
+      optimize_code: {
+        title: '⚡ Optimization Suggestions',
+        content: `**Code review for**: "${title}"\n\nConfigure your API key for AI-powered optimization suggestions including:\n• Performance improvements\n• Code quality enhancements\n• Best practice recommendations`
+      },
+      smart_summary: {
+        title: '📰 Smart Summary',
+        content: `**Article**: "${title}"\n\nConfigure your API key for AI-powered summary generation. The AI will analyze the full article and produce a concise overview with main points.`
+      },
+      extract_keypoints: {
+        title: '🎯 Key Points',
+        content: `**Extracting from**: "${title}"\n\nConfigure your API key for AI-powered key point extraction including:\n• Main arguments and thesis\n• Supporting data and evidence\n• Conclusions and action items`
+      },
+      translate_page: {
+        title: '🌐 Translation',
+        content: selectedText
+          ? `**Translating selected text:**\n\n"${selectedText.substring(0, 200)}"\n\nConfigure your API key for AI-powered translation.`
+          : `**Page**: "${title}"\n\nConfigure your API key for full page translation.`
+      },
+      read_later: {
+        title: '📌 Saved for Later',
+        content: `**Saved**: "${title}"\n\nURL: ${url}\nSaved at: ${new Date().toLocaleString()}\n\n*Page has been added to your reading list.*`
+      },
+      analyze_sentiment: {
+        title: '🧠 Sentiment Analysis',
+        content: `**Analyzing**: "${title}"\n\nConfigure your API key for AI-powered sentiment analysis including tone detection, objectivity scoring, and emotional intensity measurement.`
+      },
+      deep_research: {
+        title: '🔬 Deep Research',
+        content: `**Research topic**: "${title}"\n\nConfigure your API key for comprehensive AI research briefing.`
+      },
+      generate_notes: {
+        title: '📒 Study Notes',
+        content: `**Generating notes for**: "${title}"\n\nConfigure your API key for AI-powered study note generation.`
+      },
+      check_facts: {
+        title: '✅ Fact Check',
+        content: `**Fact checking**: "${title}"\n\nConfigure your API key for AI-powered fact verification.`
+      }
     };
-  }
 
-  simulateTrackPrice(context) {
-    return {
-      success: true,
-      type: 'price_track',
-      title: 'Price Tracking Active',
-      content: `💰 **Price Tracker Started**\n\nTracking: "${context.title || 'this product'}"\nCurrent URL: ${context.url || 'N/A'}\nAlert threshold: -10% from current price\n\n*Price monitoring requires scheduled background checks.*`
+    const action = actions[actionId] || {
+      title: 'Unknown Action',
+      content: 'This action is not recognized.'
     };
-  }
 
-  simulateComparePrices(context) {
     return {
       success: true,
-      type: 'comparison',
-      title: 'Price Comparison',
-      content: `📊 **Price Comparison Results**\n\nProduct: "${context.title || 'Selected Item'}"\n\n| Store | Price | Shipping |\n|-------|-------|----------|\n| Store A | $XX.XX | Free |\n| Store B | $XX.XX | $4.99 |\n| Store C | $XX.XX | Free |\n\n*Real prices require store API integration.*`
-    };
-  }
-
-  simulateExplainCode(context) {
-    const code = context.selectedText || 'the visible code';
-    return {
-      success: true,
-      type: 'explanation',
-      title: 'Code Explanation',
-      content: `💡 **Code Analysis**\n\n\`\`\`\n${code.substring(0, 200)}${code.length > 200 ? '...' : ''}\n\`\`\`\n\nThis code segment handles its primary logic through structured control flow. Key components include variable declarations, conditional branching, and return statements.\n\n*Detailed AI explanation requires LLM API integration.*`
-    };
-  }
-
-  simulateOptimizeCode(context) {
-    return {
-      success: true,
-      type: 'optimization',
-      title: 'Optimization Suggestions',
-      content: `⚡ **Optimization Report**\n\n**Suggestions for: "${context.title || 'Current Code'}"**\n\n1. 🔄 Consider memoization for repeated calculations\n2. 📦 Bundle size could be reduced with tree-shaking\n3. 🚀 Async operations can be parallelized\n\n*Detailed analysis requires code parsing API.*`
-    };
-  }
-
-  simulateKeypoints(context) {
-    return {
-      success: true,
-      type: 'keypoints',
-      title: 'Key Points',
-      content: `🎯 **Key Points from: "${context.title || 'Current Article'}"**\n\n• Main thesis and supporting arguments identified\n• Data points and statistics extracted\n• Conclusions and action items highlighted\n\n*Full extraction requires NLP API integration.*`
-    };
-  }
-
-  simulateTranslate(context) {
-    const text = context.selectedText || 'page content';
-    return {
-      success: true,
-      type: 'translation',
-      title: 'Translation',
-      content: `🌐 **Translation Result**\n\nOriginal: "${text.substring(0, 100)}${text.length > 100 ? '...' : ''}"\n\nTranslated text would appear here in your preferred language.\n\n*Translation requires language API integration.*`
-    };
-  }
-
-  simulateReadLater(context) {
-    return {
-      success: true,
-      type: 'saved',
-      title: 'Saved for Later',
-      content: `📌 **Saved to Reading List**\n\n"${context.title || 'Current Page'}"\n${context.url || ''}\n\nAdded: ${new Date().toLocaleString()}\n\n*View all saved items in the extension popup.*`
-    };
-  }
-
-  simulateAnalyzeSentiment(context) {
-    return {
-      success: true,
-      type: 'sentiment',
-      title: 'Sentiment Analysis',
-      content: `🧠 **Sentiment Report**\n\nContent: "${context.title || 'Current Page'}"\n\nOverall tone: Neutral-Positive\nObjectivity: 72%\nEmotional intensity: Low-Medium\n\n*Detailed sentiment analysis requires NLP API.*`
+      type: actionId,
+      title: action.title,
+      content: action.content,
+      source: 'local'
     };
   }
 }
 
 // ---------------------------------------------------------------------------
-// Initialize engines
+// Orchestrator — Wire everything together
 // ---------------------------------------------------------------------------
-const engine = new RecommendationEngine();
-const executor = new ActionExecutor();
+const contextManager = new ContextManager();
+const aiEngine = new AIEngine(contextManager);
+const fallbackEngine = new RuleBasedFallback();
+const actionExecutor = new ActionExecutor(aiEngine);
 
 // ---------------------------------------------------------------------------
 // Message handlers
 // ---------------------------------------------------------------------------
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+
   if (message.type === 'GET_RECOMMENDATIONS') {
-    const recommendations = engine.recommend(message.context);
-    sendResponse({ recommendations });
-    return true;
+    handleGetRecommendations(message, sendResponse);
+    return true; // async
   }
 
   if (message.type === 'EXECUTE_ACTION') {
-    executor.execute(message.actionId, message.context).then(result => {
-      engine.recordAction(message.actionId);
-      sendResponse(result);
+    handleExecuteAction(message, sendResponse);
+    return true;
+  }
+
+  if (message.type === 'RECORD_ACTION_USED') {
+    contextManager.recordActionUsed(message.actionId);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message.type === 'RECORD_ACTIONS_IGNORED') {
+    contextManager.recordActionIgnored(message.actionIds || []);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message.type === 'SET_API_KEY') {
+    aiEngine.setApiKey(message.apiKey).then(() => {
+      sendResponse({ ok: true, configured: aiEngine.isConfigured() });
     });
-    return true; // async response
+    return true;
+  }
+
+  if (message.type === 'SET_MODEL') {
+    aiEngine.setModel(message.model).then(() => {
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
+  if (message.type === 'GET_STATUS') {
+    sendResponse({
+      configured: aiEngine.isConfigured(),
+      model: aiEngine.model,
+      cacheSize: aiEngine.cache.cache.size,
+      historySize: contextManager.historyQueue.length,
+      sessionMinutes: contextManager.getSessionDuration(),
+      browsingPattern: contextManager.getBrowsingPattern(),
+      actionFeedback: contextManager.actionFeedback
+    });
+    return false;
   }
 
   if (message.type === 'GET_STATS') {
-    sendResponse({ history: engine.userHistory });
-    return true;
+    sendResponse({ history: contextManager.actionFeedback });
+    return false;
   }
 });
+
+async function handleGetRecommendations(message, sendResponse) {
+  const context = message.context;
+
+  // Try AI first
+  if (aiEngine.isConfigured()) {
+    try {
+      const result = await aiEngine.recommend(context);
+      sendResponse({ ...result, mode: 'ai' });
+      return;
+    } catch (err) {
+      console.warn('[Context-Aware AI] AI engine error, falling back to rules:', err.message);
+      // Fall through to rule-based
+      const fallbackResult = fallbackEngine.recommend(context);
+      sendResponse({
+        ...fallbackResult,
+        mode: 'fallback',
+        aiError: err.message
+      });
+      return;
+    }
+  }
+
+  // No API key — use rule-based
+  const result = fallbackEngine.recommend(context);
+  sendResponse({ ...result, mode: 'fallback', aiError: 'API_KEY_MISSING' });
+}
+
+async function handleExecuteAction(message, sendResponse) {
+  try {
+    const result = await actionExecutor.execute(message.actionId, message.context);
+    contextManager.recordActionUsed(message.actionId);
+    sendResponse(result);
+  } catch (err) {
+    sendResponse({
+      success: false,
+      title: 'Execution Error',
+      content: `Failed to execute action: ${err.message}`,
+      source: 'error'
+    });
+  }
+}
 
 // Handle keyboard shortcut
 chrome.commands.onCommand.addListener((command) => {
@@ -623,5 +968,4 @@ chrome.commands.onCommand.addListener((command) => {
   }
 });
 
-// Log initialization
-console.log('[Context-Aware AI] Background service worker initialized');
+console.log('[Context-Aware AI] v2.0 background service worker initialized (AI-first architecture)');
