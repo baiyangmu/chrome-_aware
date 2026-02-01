@@ -1,5 +1,5 @@
 // ============================================================================
-// Context-Aware AI Assistant v2.0 — Popup Script
+// Context-Aware AI Assistant v2.1 — Popup Script
 // ============================================================================
 
 const ACTION_META = {
@@ -21,6 +21,13 @@ const ACTION_META = {
 };
 
 document.addEventListener('DOMContentLoaded', () => {
+  const providerSelect = document.getElementById('providerSelect');
+  const endpointInput = document.getElementById('endpointInput');
+  const apiKeyInput = document.getElementById('apiKeyInput');
+  const modelInput = document.getElementById('modelInput');
+  const saveBtn = document.getElementById('saveKeyBtn');
+  const configStatus = document.getElementById('configStatus');
+
   // Open sidebar
   document.getElementById('openSidebar').addEventListener('click', async () => {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -30,33 +37,54 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Save API key
-  document.getElementById('saveKeyBtn').addEventListener('click', async () => {
-    const key = document.getElementById('apiKeyInput').value.trim();
-    if (!key) return;
-
-    const statusEl = document.getElementById('configStatus');
-    statusEl.textContent = 'Saving...';
-    statusEl.className = 'config-status';
-
-    const res = await chrome.runtime.sendMessage({ type: 'SET_API_KEY', apiKey: key });
-    if (res.configured) {
-      statusEl.textContent = 'API key saved successfully.';
-      statusEl.className = 'config-status success';
-      document.getElementById('apiKeyInput').value = '';
-      document.getElementById('apiKeyInput').placeholder = '••••••••••••  (configured)';
-      updateStatusBadge(true);
-    } else {
-      statusEl.textContent = 'Failed to save.';
-      statusEl.className = 'config-status error';
-    }
+  // Update endpoint placeholder based on provider
+  providerSelect.addEventListener('change', () => {
+    updateEndpointPlaceholder();
   });
 
-  // Model change
-  document.getElementById('modelSelect').addEventListener('change', async (e) => {
-    await chrome.runtime.sendMessage({ type: 'SET_MODEL', model: e.target.value });
-    document.getElementById('configStatus').textContent = 'Model updated.';
-    document.getElementById('configStatus').className = 'config-status success';
+  // Save all config at once
+  saveBtn.addEventListener('click', async () => {
+    const key = apiKeyInput.value.trim();
+    if (!key) {
+      configStatus.textContent = '请输入 API Key';
+      configStatus.className = 'config-status error';
+      return;
+    }
+
+    configStatus.textContent = '保存中...';
+    configStatus.className = 'config-status';
+
+    // Save provider
+    await chrome.runtime.sendMessage({
+      type: 'SET_PROVIDER',
+      provider: providerSelect.value
+    });
+
+    // Save endpoint
+    await chrome.runtime.sendMessage({
+      type: 'SET_ENDPOINT',
+      endpoint: endpointInput.value.trim()
+    });
+
+    // Save model
+    const model = modelInput.value.trim();
+    if (model) {
+      await chrome.runtime.sendMessage({ type: 'SET_MODEL', model });
+    }
+
+    // Save API key
+    const res = await chrome.runtime.sendMessage({ type: 'SET_API_KEY', apiKey: key });
+    if (res.configured) {
+      configStatus.textContent = 'API Key 已保存，AI 功能已启用。';
+      configStatus.className = 'config-status success';
+      apiKeyInput.value = '';
+      apiKeyInput.placeholder = '••••••••••••  (已配置)';
+      updateStatusBadge(true);
+      document.getElementById('setupBanner').style.display = 'none';
+    } else {
+      configStatus.textContent = '保存失败。';
+      configStatus.className = 'config-status error';
+    }
   });
 
   // Load initial state
@@ -64,13 +92,23 @@ document.addEventListener('DOMContentLoaded', () => {
   loadStats();
 });
 
+function updateEndpointPlaceholder() {
+  const provider = document.getElementById('providerSelect').value;
+  const endpointInput = document.getElementById('endpointInput');
+  if (provider === 'anthropic') {
+    endpointInput.placeholder = 'https://api.anthropic.com/v1/messages';
+  } else {
+    endpointInput.placeholder = 'https://api.openai.com/v1/chat/completions';
+  }
+}
+
 function updateStatusBadge(configured) {
   const badge = document.getElementById('statusBadge');
   if (configured) {
     badge.textContent = 'AI Ready';
     badge.className = 'status-badge status-configured';
   } else {
-    badge.textContent = 'API Key Needed';
+    badge.textContent = '需要配置 API Key';
     badge.className = 'status-badge status-unconfigured';
   }
 }
@@ -81,13 +119,32 @@ async function loadStatus() {
     updateStatusBadge(status.configured);
 
     if (status.configured) {
-      document.getElementById('apiKeyInput').placeholder = '••••••••••••  (configured)';
+      document.getElementById('apiKeyInput').placeholder = '••••••••••••  (已配置)';
+      document.getElementById('setupBanner').style.display = 'none';
+    } else {
+      // Show setup banner when not configured
+      document.getElementById('setupBanner').style.display = 'flex';
     }
+
+    // Restore provider
+    if (status.apiProvider) {
+      document.getElementById('providerSelect').value = status.apiProvider;
+    }
+
+    // Restore endpoint
+    if (status.apiEndpoint) {
+      document.getElementById('endpointInput').value = status.apiEndpoint;
+    }
+
+    // Restore model
     if (status.model) {
-      document.getElementById('modelSelect').value = status.model;
+      document.getElementById('modelInput').value = status.model;
     }
+
+    updateEndpointPlaceholder();
   } catch {
     updateStatusBadge(false);
+    document.getElementById('setupBanner').style.display = 'flex';
   }
 }
 
@@ -106,7 +163,7 @@ async function loadStats() {
     const listEl = document.getElementById('recentList');
 
     if (entries.length === 0) {
-      listEl.innerHTML = '<div class="no-data">No actions used yet. Open the sidebar to get started!</div>';
+      listEl.innerHTML = '<div class="no-data">暂无操作记录。打开侧边栏开始使用！</div>';
       return;
     }
 
@@ -124,6 +181,6 @@ async function loadStats() {
     }).join('');
   } catch {
     document.getElementById('recentList').innerHTML =
-      '<div class="no-data">Unable to load statistics.</div>';
+      '<div class="no-data">无法加载统计数据。</div>';
   }
 }

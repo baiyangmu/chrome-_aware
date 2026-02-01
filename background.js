@@ -1,12 +1,12 @@
 // ============================================================================
-// Context-Aware AI Assistant v2.0 — Background Service Worker
+// Context-Aware AI Assistant v2.1 — Background Service Worker
 // Phase 3: AI-First Architecture
 //
 // Layers:
 //   1. ContextManager     — Maintains browsing history + session context
 //   2. PrivacyFilter      — Strips sensitive data before sending to LLM
 //   3. PromptBuilder      — Constructs structured prompts from context
-//   4. AIEngine           — Calls Anthropic Claude API for recommendations
+//   4. AIEngine           — Calls LLM API (OpenAI-compatible + Anthropic)
 //   5. CacheLayer         — LRU cache to avoid redundant API calls
 //   6. RuleBasedFallback  — Deterministic fallback when AI is unavailable
 //   7. ActionExecutor     — Executes the chosen action
@@ -397,7 +397,7 @@ class CacheLayer {
 }
 
 // ---------------------------------------------------------------------------
-// 5. AIEngine — Calls Anthropic Claude API
+// 5. AIEngine — Calls LLM API (supports Anthropic + OpenAI-compatible)
 // ---------------------------------------------------------------------------
 class AIEngine {
   constructor(contextManager) {
@@ -406,16 +406,22 @@ class AIEngine {
     this.promptBuilder = new PromptBuilder(contextManager);
     this.cache = new CacheLayer(50);
     this.apiKey = null;
-    this.model = 'claude-sonnet-4-20250514';
+    this.apiProvider = 'openai';   // 'anthropic' | 'openai'
+    this.apiEndpoint = '';         // custom endpoint URL (empty = use default)
+    this.model = 'gpt-4o';
     this.maxTokens = 1024;
     this.loadSettings();
   }
 
   async loadSettings() {
     try {
-      const data = await chrome.storage.local.get(['apiKey', 'aiModel']);
+      const data = await chrome.storage.local.get([
+        'apiKey', 'aiModel', 'apiProvider', 'apiEndpoint'
+      ]);
       this.apiKey = data.apiKey || null;
       if (data.aiModel) this.model = data.aiModel;
+      if (data.apiProvider) this.apiProvider = data.apiProvider;
+      if (data.apiEndpoint) this.apiEndpoint = data.apiEndpoint;
     } catch { /* first run */ }
   }
 
@@ -427,6 +433,22 @@ class AIEngine {
   async setModel(model) {
     this.model = model;
     await chrome.storage.local.set({ aiModel: model });
+  }
+
+  async setProvider(provider) {
+    this.apiProvider = provider;
+    await chrome.storage.local.set({ apiProvider: provider });
+  }
+
+  async setEndpoint(endpoint) {
+    this.apiEndpoint = endpoint;
+    await chrome.storage.local.set({ apiEndpoint: endpoint });
+  }
+
+  getEffectiveEndpoint() {
+    if (this.apiEndpoint) return this.apiEndpoint;
+    if (this.apiProvider === 'anthropic') return 'https://api.anthropic.com/v1/messages';
+    return 'https://api.openai.com/v1/chat/completions';
   }
 
   isConfigured() {
@@ -457,7 +479,7 @@ class AIEngine {
     const userPrompt = this.promptBuilder.buildUserPrompt(sanitized, historyContext);
 
     // Call API
-    const result = await this.callClaude(systemPrompt, userPrompt);
+    const result = await this.callAI(systemPrompt, userPrompt);
 
     // Cache result
     this.cache.set(cacheKey, result);
@@ -471,29 +493,52 @@ class AIEngine {
   async recommendIncremental(previousRecs, newSignals) {
     const systemPrompt = this.promptBuilder.buildSystemPrompt();
     const userPrompt = this.promptBuilder.buildIncrementalPrompt(previousRecs, newSignals);
-    return await this.callClaude(systemPrompt, userPrompt);
+    return await this.callAI(systemPrompt, userPrompt);
   }
 
-  async callClaude(systemPrompt, userPrompt) {
+  async callAI(systemPrompt, userPrompt) {
     if (!this.apiKey) {
       throw new Error('API_KEY_MISSING');
     }
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': this.apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
-      body: JSON.stringify({
-        model: this.model,
-        max_tokens: this.maxTokens,
-        system: systemPrompt,
-        messages: [{ role: 'user', content: userPrompt }]
-      })
-    });
+    const endpoint = this.getEffectiveEndpoint();
+    let response;
+
+    if (this.apiProvider === 'anthropic') {
+      // Anthropic Claude API format
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': this.apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true'
+        },
+        body: JSON.stringify({
+          model: this.model,
+          max_tokens: this.maxTokens,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }]
+        })
+      });
+    } else {
+      // OpenAI-compatible API format (works with OpenAI, DeepSeek, Moonshot, local LLMs, etc.)
+      response = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`
+        },
+        body: JSON.stringify({
+          model: this.model,
+          max_tokens: this.maxTokens,
+          messages: [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: userPrompt }
+          ]
+        })
+      });
+    }
 
     if (!response.ok) {
       const errBody = await response.text();
@@ -504,7 +549,14 @@ class AIEngine {
     }
 
     const data = await response.json();
-    const text = data.content?.[0]?.text || '';
+
+    // Extract text from response based on provider format
+    let text;
+    if (this.apiProvider === 'anthropic') {
+      text = data.content?.[0]?.text || '';
+    } else {
+      text = data.choices?.[0]?.message?.content || '';
+    }
 
     // Parse JSON from response — handle possible markdown fences
     const jsonStr = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
@@ -713,24 +765,47 @@ class ActionExecutor {
     if (!taskPrompt) return this.executeLocally(actionId, context);
 
     try {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': this.aiEngine.apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true'
-        },
-        body: JSON.stringify({
-          model: this.aiEngine.model,
-          max_tokens: 1500,
-          messages: [{ role: 'user', content: taskPrompt }]
-        })
-      });
+      const endpoint = this.aiEngine.getEffectiveEndpoint();
+      let response;
+
+      if (this.aiEngine.apiProvider === 'anthropic') {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': this.aiEngine.apiKey,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true'
+          },
+          body: JSON.stringify({
+            model: this.aiEngine.model,
+            max_tokens: 1500,
+            messages: [{ role: 'user', content: taskPrompt }]
+          })
+        });
+      } else {
+        response = await fetch(endpoint, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${this.aiEngine.apiKey}`
+          },
+          body: JSON.stringify({
+            model: this.aiEngine.model,
+            max_tokens: 1500,
+            messages: [{ role: 'user', content: taskPrompt }]
+          })
+        });
+      }
 
       if (!response.ok) throw new Error(`API error: ${response.status}`);
       const data = await response.json();
-      const result = data.content?.[0]?.text || 'No response from AI.';
+      let result;
+      if (this.aiEngine.apiProvider === 'anthropic') {
+        result = data.content?.[0]?.text || 'No response from AI.';
+      } else {
+        result = data.choices?.[0]?.message?.content || 'No response from AI.';
+      }
 
       const ACTION_TITLES = {
         summarize_video: '📝 Video Summary',
@@ -896,10 +971,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.type === 'SET_PROVIDER') {
+    aiEngine.setProvider(message.provider).then(() => {
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
+  if (message.type === 'SET_ENDPOINT') {
+    aiEngine.setEndpoint(message.endpoint).then(() => {
+      sendResponse({ ok: true });
+    });
+    return true;
+  }
+
   if (message.type === 'GET_STATUS') {
     sendResponse({
       configured: aiEngine.isConfigured(),
       model: aiEngine.model,
+      apiProvider: aiEngine.apiProvider,
+      apiEndpoint: aiEngine.apiEndpoint,
+      effectiveEndpoint: aiEngine.getEffectiveEndpoint(),
       cacheSize: aiEngine.cache.cache.size,
       historySize: contextManager.historyQueue.length,
       sessionMinutes: contextManager.getSessionDuration(),
@@ -968,4 +1060,4 @@ chrome.commands.onCommand.addListener((command) => {
   }
 });
 
-console.log('[Context-Aware AI] v2.0 background service worker initialized (AI-first architecture)');
+console.log('[Context-Aware AI] v2.1 background service worker initialized (multi-provider AI architecture)');

@@ -1,5 +1,5 @@
 // ============================================================================
-// Context-Aware AI Assistant v2.0 — Content Script
+// Context-Aware AI Assistant v2.1 — Content Script
 // Rich Context Collection + Behavior Tracking + Sidebar UI
 // ============================================================================
 
@@ -348,22 +348,31 @@
         </div>
 
         <div id="caa-settings-panel" class="caa-settings-panel" style="display:none;">
-          <div class="caa-settings-title">API Configuration</div>
+          <div class="caa-settings-title">API 配置</div>
           <div class="caa-settings-row">
-            <label class="caa-settings-label">Anthropic API Key</label>
+            <label class="caa-settings-label">API 提供商</label>
+            <select id="caa-provider-select" class="caa-select">
+              <option value="openai">OpenAI 兼容（OpenAI / DeepSeek / 本地模型等）</option>
+              <option value="anthropic">Anthropic Claude</option>
+            </select>
+          </div>
+          <div class="caa-settings-row">
+            <label class="caa-settings-label">API Endpoint（留空使用默认）</label>
+            <input type="text" id="caa-endpoint-input" class="caa-input"
+                   placeholder="https://api.openai.com/v1/chat/completions" autocomplete="off" />
+          </div>
+          <div class="caa-settings-row">
+            <label class="caa-settings-label">API Key</label>
             <div class="caa-input-group">
               <input type="password" id="caa-api-key-input" class="caa-input"
-                     placeholder="sk-ant-..." autocomplete="off" />
-              <button id="caa-save-key-btn" class="caa-save-btn">Save</button>
+                     placeholder="sk-..." autocomplete="off" />
+              <button id="caa-save-key-btn" class="caa-save-btn">保存</button>
             </div>
           </div>
           <div class="caa-settings-row">
-            <label class="caa-settings-label">Model</label>
-            <select id="caa-model-select" class="caa-select">
-              <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
-              <option value="claude-haiku-4-20250414">Claude Haiku 4</option>
-              <option value="claude-opus-4-20250514">Claude Opus 4</option>
-            </select>
+            <label class="caa-settings-label">模型名称</label>
+            <input type="text" id="caa-model-input" class="caa-input"
+                   placeholder="gpt-4o" autocomplete="off" />
           </div>
           <div id="caa-settings-status" class="caa-settings-status"></div>
         </div>
@@ -396,7 +405,7 @@
         </div>
 
         <div class="caa-footer">
-          <span class="caa-footer-text">Context-Aware AI v2.0</span>
+          <span class="caa-footer-text">Context-Aware AI v2.1</span>
           <span class="caa-shortcut-hint">Ctrl+Shift+K</span>
         </div>
       `;
@@ -433,38 +442,65 @@
       try {
         const status = await chrome.runtime.sendMessage({ type: 'GET_STATUS' });
         const keyInput = this.sidebar.querySelector('#caa-api-key-input');
-        const modelSelect = this.sidebar.querySelector('#caa-model-select');
+        const modelInput = this.sidebar.querySelector('#caa-model-input');
+        const providerSelect = this.sidebar.querySelector('#caa-provider-select');
+        const endpointInput = this.sidebar.querySelector('#caa-endpoint-input');
+        const settingsPanel = this.sidebar.querySelector('#caa-settings-panel');
+
+        // Auto-show settings panel if not configured
+        if (!status.configured) {
+          settingsPanel.style.display = 'block';
+        }
 
         if (status.configured) {
-          keyInput.placeholder = '••••••••••••••••••  (configured)';
+          keyInput.placeholder = '••••••••••••••••••  (已配置)';
         }
-        modelSelect.value = status.model || 'claude-sonnet-4-20250514';
 
-        // Bind save
+        // Restore saved values
+        if (status.apiProvider) providerSelect.value = status.apiProvider;
+        if (status.apiEndpoint) endpointInput.value = status.apiEndpoint;
+        if (status.model) modelInput.value = status.model;
+
+        // Update endpoint placeholder based on provider
+        const updatePlaceholder = () => {
+          if (providerSelect.value === 'anthropic') {
+            endpointInput.placeholder = 'https://api.anthropic.com/v1/messages';
+          } else {
+            endpointInput.placeholder = 'https://api.openai.com/v1/chat/completions';
+          }
+        };
+        updatePlaceholder();
+        providerSelect.onchange = updatePlaceholder;
+
+        // Bind save — saves all settings at once
         this.sidebar.querySelector('#caa-save-key-btn').onclick = async () => {
           const key = keyInput.value.trim();
           if (!key) return;
           const statusEl = this.sidebar.querySelector('#caa-settings-status');
-          statusEl.textContent = 'Saving...';
+          statusEl.textContent = '保存中...';
           statusEl.className = 'caa-settings-status';
 
+          // Save provider
+          await chrome.runtime.sendMessage({ type: 'SET_PROVIDER', provider: providerSelect.value });
+          // Save endpoint
+          await chrome.runtime.sendMessage({ type: 'SET_ENDPOINT', endpoint: endpointInput.value.trim() });
+          // Save model
+          const model = modelInput.value.trim();
+          if (model) {
+            await chrome.runtime.sendMessage({ type: 'SET_MODEL', model });
+          }
+          // Save API key
           const res = await chrome.runtime.sendMessage({ type: 'SET_API_KEY', apiKey: key });
           if (res.configured) {
-            statusEl.textContent = 'API key saved. Recommendations will now use AI.';
+            statusEl.textContent = 'API Key 已保存，推荐将使用 AI 模式。';
             statusEl.className = 'caa-settings-status caa-status-success';
             keyInput.value = '';
-            keyInput.placeholder = '••••••••••••••••••  (configured)';
+            keyInput.placeholder = '••••••••••••••••••  (已配置)';
             this.loadRecommendations(); // refresh with AI
           } else {
-            statusEl.textContent = 'Failed to save.';
+            statusEl.textContent = '保存失败。';
             statusEl.className = 'caa-settings-status caa-status-error';
           }
-        };
-
-        // Bind model change
-        modelSelect.onchange = async () => {
-          await chrome.runtime.sendMessage({ type: 'SET_MODEL', model: modelSelect.value });
-          this.sidebar.querySelector('#caa-settings-status').textContent = 'Model updated.';
         };
 
       } catch { /* extension context lost */ }
@@ -568,7 +604,7 @@
         } else if (this.aiError === 'API_KEY_MISSING') {
           recContainer.innerHTML = `<div class="caa-setup-banner">
             <span class="caa-setup-icon">🔑</span>
-            <span>Configure your API key in <strong>Settings</strong> (⚙) to enable AI-powered recommendations.</span>
+            <span>请在上方 <strong>API 配置</strong> 面板中设置 API Key 以启用 AI 推荐。支持 OpenAI 兼容格式，可接入任意大模型。</span>
           </div>`;
           this.renderRecommendations(true);
         } else {
@@ -770,5 +806,5 @@
     }
   });
 
-  console.log('[Context-Aware AI] v2.0 content script loaded on', location.href);
+  console.log('[Context-Aware AI] v2.1 content script loaded on', location.href);
 })();

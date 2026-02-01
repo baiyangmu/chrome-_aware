@@ -12,7 +12,9 @@
 
 ## 功能特性
 
-- **AI 驱动推荐** — 调用 Anthropic Claude API，基于页面全部上下文生成个性化推荐
+- **AI 驱动推荐** — 支持任意 OpenAI 兼容 API 以及 Anthropic Claude API
+- **多模型支持** — 可接入 OpenAI、DeepSeek、Moonshot、GLM、本地部署的 LLM 等任意支持 OpenAI 格式的模型
+- **自定义 Endpoint** — 可配置任意 API 地址，支持自建代理和本地部署
 - **丰富的上下文采集** — URL、标题、meta 标签、OG 标签、DOM 结构特征、代码块检测、用户行为信号（停留时间、滚动深度、交互强度、文本选中）
 - **浏览历史感知** — 跟踪最近 15 个页面访问，识别浏览模式（深度钻研、主题研究、快速浏览）
 - **隐私保护** — 发送到 API 前自动过滤信用卡号、身份证号、邮箱、密码、API Key 等敏感信息
@@ -24,44 +26,72 @@
 
 ## 设置 AI 大模型 API Key
 
-本插件使用 Anthropic Claude API 进行 AI 推理。你需要获取一个 API Key 才能启用 AI 功能。
+本插件支持两种 API 格式：
+- **OpenAI 兼容格式**（默认）— 适用于 OpenAI、DeepSeek、Moonshot、GLM、vLLM、Ollama 等所有兼容 OpenAI 接口的服务
+- **Anthropic 格式** — 适用于 Anthropic Claude 官方 API
 
-### 第一步：获取 Anthropic API Key
+### 第一步：获取 API Key
 
-1. 访问 [Anthropic Console](https://console.anthropic.com/)
-2. 注册或登录你的账号
-3. 进入 **API Keys** 页面（左侧导航栏 Settings → API Keys）
-4. 点击 **Create Key** 创建新的 API Key
-5. 复制生成的 Key（格式类似 `sk-ant-api03-...`）
+根据你选择的 AI 服务商获取 API Key：
 
-> **重要**：API Key 只会显示一次，请妥善保存。使用 Claude API 会产生费用，详见 [Anthropic 定价页面](https://www.anthropic.com/pricing)。
+| 服务商 | 获取地址 | Key 格式示例 |
+|--------|---------|-------------|
+| OpenAI | [platform.openai.com](https://platform.openai.com/api-keys) | `sk-proj-...` |
+| DeepSeek | [platform.deepseek.com](https://platform.deepseek.com/api_keys) | `sk-...` |
+| Moonshot (Kimi) | [platform.moonshot.cn](https://platform.moonshot.cn/console/api-keys) | `sk-...` |
+| 智谱 GLM | [open.bigmodel.cn](https://open.bigmodel.cn/usercenter/apikeys) | `...` |
+| Anthropic Claude | [console.anthropic.com](https://console.anthropic.com/) | `sk-ant-api03-...` |
+| 本地部署 (Ollama) | 无需 Key | 填入任意值即可 |
 
-### 第二步：在插件中配置 API Key
+### 第二步：在插件中配置
 
 **方式一：通过弹出窗口（推荐）**
 
 1. 点击浏览器工具栏中的插件图标，打开弹出窗口
-2. 在 **API Configuration** 区域，将你的 API Key 粘贴到输入框
-3. 点击 **Save** 按钮
-4. 顶部状态徽章变为绿色 "AI Ready" 表示配置成功
+2. 如果尚未配置，顶部会显示醒目的配置提示
+3. 选择 **API 提供商**（OpenAI 兼容 或 Anthropic Claude）
+4. 填入 **API Endpoint**（留空则使用默认地址）
+5. 粘贴你的 **API Key**
+6. 填入 **模型名称**（如 `gpt-4o`、`deepseek-chat`、`moonshot-v1-8k` 等）
+7. 点击 **保存** 按钮
+8. 顶部状态徽章变为绿色 "AI Ready" 表示配置成功
 
 **方式二：通过侧边栏设置**
 
 1. 按 `Ctrl+Shift+K` 打开侧边栏
-2. 点击顶部的齿轮图标（⚙）展开设置面板
-3. 在 **Anthropic API Key** 输入框中粘贴 Key
-4. 点击 **Save**
-5. 标题栏旁的徽章从 "Rules" 变为 "AI" 表示成功
+2. 如果尚未配置 API Key，**设置面板会自动展开**
+3. 也可以随时点击顶部齿轮图标（⚙）手动打开设置
+4. 选择 API 提供商、填入 Endpoint、API Key 和模型名称
+5. 点击 **保存**
+6. 标题栏旁的徽章从 "Rules" 变为 "AI" 表示成功
 
-### 第三步：选择模型（可选）
+### 常用配置示例
 
-插件支持以下模型，可在弹出窗口或侧边栏设置中切换：
+**OpenAI GPT-4o：**
+- 提供商：OpenAI 兼容
+- Endpoint：留空（自动使用 `https://api.openai.com/v1/chat/completions`）
+- 模型：`gpt-4o`
 
-| 模型 | 特点 | 适用场景 |
-|------|------|---------|
-| Claude Sonnet 4 | 性能与成本平衡 | **默认推荐**，日常使用 |
-| Claude Haiku 4 | 响应最快，成本最低 | 追求速度、降低开销 |
-| Claude Opus 4 | 最强推理能力 | 复杂分析、深度研究 |
+**DeepSeek：**
+- 提供商：OpenAI 兼容
+- Endpoint：`https://api.deepseek.com/v1/chat/completions`
+- 模型：`deepseek-chat`
+
+**Moonshot (Kimi)：**
+- 提供商：OpenAI 兼容
+- Endpoint：`https://api.moonshot.cn/v1/chat/completions`
+- 模型：`moonshot-v1-8k`
+
+**Anthropic Claude：**
+- 提供商：Anthropic Claude
+- Endpoint：留空（自动使用 `https://api.anthropic.com/v1/messages`）
+- 模型：`claude-sonnet-4-20250514`
+
+**本地 Ollama：**
+- 提供商：OpenAI 兼容
+- Endpoint：`http://localhost:11434/v1/chat/completions`
+- API Key：填入任意值（如 `ollama`）
+- 模型：`llama3` 或你部署的模型名称
 
 ### 未配置 API Key 时
 
@@ -73,7 +103,7 @@
 ### API Key 安全说明
 
 - API Key 存储在浏览器本地（`chrome.storage.local`），**不会上传到任何第三方服务器**
-- Key 仅用于直接调用 Anthropic 官方 API（`api.anthropic.com`）
+- Key 仅用于直接调用你配置的 API 服务
 - 发送给 AI 的页面内容经过隐私过滤，敏感信息会被自动移除
 - 你可以随时在设置中更换或删除 Key
 
@@ -122,7 +152,7 @@ context-aware-ai-plugin/
 ├── background.js      # Service Worker: AI 引擎 + 规则降级 + 操作执行器
 ├── content.js         # Content Script: 上下文采集 + 侧边栏 UI
 ├── content.css        # 侧边栏样式：深色主题 + 渐变设计
-├── popup.html         # 弹出窗口界面（API Key 配置 + 统计）
+├── popup.html         # 弹出窗口界面（API 配置 + 统计）
 ├── popup.js           # 弹出窗口逻辑
 ├── icons/
 │   ├── icon16.png     # 工具栏图标 (16x16)
@@ -140,7 +170,7 @@ context-aware-ai-plugin/
 │                   │          │                                     │
 │  ContextAnalyzer  │          │  ┌─────────────┐  ┌──────────────┐ │
 │  - URL/Title/Meta │          │  │  AIEngine    │  │ RuleBasedFB  │ │
-│  - DOM 结构分析    │          │  │  (Claude API)│  │ (降级引擎)    │ │
+│  - DOM 结构分析    │          │  │ (多API支持)  │  │ (降级引擎)    │ │
 │  - 行为信号追踪    │          │  └──────┬──────┘  └──────┬───────┘ │
 │  - 内容提取       │          │         │                 │         │
 │                   │          │  ┌──────▼─────────────────▼──────┐  │
@@ -157,20 +187,32 @@ context-aware-ai-plugin/
 └──────────────────┘          └─────────────────────────────────────┘
 ```
 
+### API 调用格式
+
+插件根据选择的提供商自动切换 API 调用格式：
+
+**OpenAI 兼容格式**（默认）：
+- 请求：`POST {endpoint}` + `Authorization: Bearer {key}` + `messages: [{role: "system"}, {role: "user"}]`
+- 响应：`choices[0].message.content`
+
+**Anthropic 格式**：
+- 请求：`POST {endpoint}` + `x-api-key: {key}` + `system: ...` + `messages: [{role: "user"}]`
+- 响应：`content[0].text`
+
 ### 数据流
 
 1. **ContextAnalyzer**（content.js）分析当前页面，生成丰富的上下文对象（URL、标题、meta、DOM 结构、行为信号）
 2. 上下文发送到 **Background Worker**
 3. **PrivacyFilter** 过滤敏感信息
 4. **CacheLayer** 检查是否有可复用的缓存结果
-5. **AIEngine** 构造结构化 Prompt 调用 Claude API（或降级到 **RuleBasedFallback**）
+5. **AIEngine** 构造结构化 Prompt 调用 LLM API（或降级到 **RuleBasedFallback**）
 6. AI 返回 3 个推荐，包含置信度、5 维评分、具体推荐理由
 7. **SidebarUI** 渲染推荐卡片，用户可执行操作
-8. **ActionExecutor** 对 AI 支持的操作再次调用 Claude 生成内容
+8. **ActionExecutor** 对 AI 支持的操作再次调用 LLM 生成内容
 
 ### AI Prompt 设计
 
-发送给 Claude 的 Prompt 包含以下结构化信息：
+发送给 LLM 的 Prompt 包含以下结构化信息：
 
 - **当前页面**：URL、标题、页面类型、meta 描述/关键词、OG 类型
 - **页面结构**：是否有视频/代码块/表单/价格元素、标题数量、预估字数/阅读时间
@@ -186,7 +228,7 @@ context-aware-ai-plugin/
 在 `background.js` 中：
 
 1. 在 `PromptBuilder.buildSystemPrompt()` 的操作表中添加新行
-2. 在 `AIEngine.callClaude()` 的 `validActionIds` 和 `ACTION_META` 中注册
+2. 在 `AIEngine.callAI()` 的 `validActionIds` 和 `ACTION_META` 中注册
 3. 在 `ActionExecutor` 中添加对应的执行逻辑（AI 或本地）
 4. 在 `RuleBasedFallback` 中添加降级策略
 

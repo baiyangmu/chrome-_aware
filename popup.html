@@ -205,6 +205,35 @@
     .config-status.success { color: #64d8cb; }
     .config-status.error { color: #ff6b6b; }
 
+    /* Setup banner */
+    .setup-banner {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 14px 16px;
+      background: linear-gradient(135deg, rgba(0, 210, 255, 0.1), rgba(123, 47, 247, 0.1));
+      border: 1px solid rgba(0, 210, 255, 0.25);
+      border-radius: 10px;
+      margin-bottom: 16px;
+      font-size: 12px;
+      color: #a8b2d1;
+      line-height: 1.6;
+    }
+
+    .setup-banner-icon {
+      font-size: 20px;
+      line-height: 1;
+      flex-shrink: 0;
+    }
+
+    .field-label {
+      display: block;
+      font-size: 11px;
+      color: #6b7394;
+      margin-bottom: 4px;
+      font-weight: 500;
+    }
+
     /* Stats */
     .stats-grid {
       display: grid;
@@ -326,7 +355,7 @@
   <div class="popup-header">
     <div class="popup-logo">✦</div>
     <div class="popup-name">Context-Aware AI</div>
-    <div class="popup-version">v2.0.0 · AI-First Architecture</div>
+    <div class="popup-version">v2.1.0 · Multi-Provider AI</div>
     <div class="status-row">
       <span id="statusBadge" class="status-badge status-unconfigured">Checking...</span>
     </div>
@@ -337,18 +366,33 @@
       ✦ Open AI Sidebar
     </button>
 
-    <div class="section-title">API Configuration</div>
+    <div id="setupBanner" class="setup-banner" style="display:none;">
+      <span class="setup-banner-icon">🔑</span>
+      <span>请先配置 API Key 以启用 AI 功能。支持 OpenAI 兼容格式，可接入任意大模型。</span>
+    </div>
+
+    <div class="section-title">API 配置</div>
     <div class="api-config">
+      <label class="field-label">API 提供商</label>
+      <select id="providerSelect" class="model-select" style="margin-bottom: 8px;">
+        <option value="openai">OpenAI 兼容（OpenAI / DeepSeek / 本地模型等）</option>
+        <option value="anthropic">Anthropic Claude</option>
+      </select>
+
+      <label class="field-label">API Endpoint（留空使用默认地址）</label>
+      <input type="text" id="endpointInput" class="api-input" style="width:100%; margin-bottom:8px;"
+             placeholder="https://api.openai.com/v1/chat/completions" autocomplete="off" />
+
+      <label class="field-label">API Key</label>
       <div class="input-group">
         <input type="password" id="apiKeyInput" class="api-input"
-               placeholder="sk-ant-..." autocomplete="off" />
-        <button id="saveKeyBtn" class="save-btn">Save</button>
+               placeholder="sk-..." autocomplete="off" />
+        <button id="saveKeyBtn" class="save-btn">保存</button>
       </div>
-      <select id="modelSelect" class="model-select">
-        <option value="claude-sonnet-4-20250514">Claude Sonnet 4</option>
-        <option value="claude-haiku-4-20250414">Claude Haiku 4 (faster)</option>
-        <option value="claude-opus-4-20250514">Claude Opus 4 (strongest)</option>
-      </select>
+
+      <label class="field-label">模型名称</label>
+      <input type="text" id="modelInput" class="api-input" style="width:100%; margin-bottom:8px;"
+             placeholder="gpt-4o" autocomplete="off" />
       <div id="configStatus" class="config-status"></div>
     </div>
 
@@ -374,7 +418,7 @@
     <span class="shortcut-badge">
       <kbd class="kbd">Ctrl</kbd>+<kbd class="kbd">Shift</kbd>+<kbd class="kbd">K</kbd>
     </span>
-    <span class="footer-link">Context-Aware AI v2.0</span>
+    <span class="footer-link">Context-Aware AI v2.1</span>
   </div>
 
   <script src="popup.js"></script>

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Context-Aware AI Assistant",
-  "version": "2.0.0",
-  "description": "AI-first intelligent assistant that uses large language models to deeply understand page context and recommend the most relevant actions.",
+  "version": "2.1.0",
+  "description": "AI-first intelligent assistant that uses large language models to deeply understand page context and recommend the most relevant actions. Supports OpenAI-compatible and Anthropic APIs.",
   "permissions": [
     "activeTab",
     "storage",
