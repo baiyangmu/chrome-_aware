@@ -49,46 +49,45 @@
 
 1. 点击浏览器工具栏中的插件图标，打开弹出窗口
 2. 如果尚未配置，顶部会显示醒目的配置提示
-3. 选择 **API 提供商**（OpenAI 兼容 或 Anthropic Claude）
-4. 填入 **API Endpoint**（留空则使用默认地址）
+3. 选择 **服务商预设**（DeepSeek / OpenAI / Moonshot / Anthropic Claude / 自定义）— **Endpoint 和模型名称会自动填入**
+4. 如需自定义，手动修改 **API Endpoint** 和 **模型名称**
 5. 粘贴你的 **API Key**
-6. 填入 **模型名称**（如 `gpt-4o`、`deepseek-chat`、`moonshot-v1-8k` 等）
-7. 点击 **保存** 按钮
-8. 顶部状态徽章变为绿色 "AI Ready" 表示配置成功
+6. 点击 **保存** 按钮
+7. 顶部状态徽章变为绿色 "AI Ready" 表示配置成功
 
 **方式二：通过侧边栏设置**
 
 1. 按 `Ctrl+Shift+K` 打开侧边栏
 2. 如果尚未配置 API Key，**设置面板会自动展开**
 3. 也可以随时点击顶部齿轮图标（⚙）手动打开设置
-4. 选择 API 提供商、填入 Endpoint、API Key 和模型名称
+4. 选择服务商预设（Endpoint 和模型自动填入），粘贴 API Key
 5. 点击 **保存**
 6. 标题栏旁的徽章从 "Rules" 变为 "AI" 表示成功
 
 ### 常用配置示例
 
 **OpenAI GPT-4o：**
-- 提供商：OpenAI 兼容
-- Endpoint：留空（自动使用 `https://api.openai.com/v1/chat/completions`）
-- 模型：`gpt-4o`
+- 预设：OpenAI
+- Endpoint：`https://api.openai.com/v1/chat/completions`（自动填入）
+- 模型：`gpt-4o`（自动填入）
 
-**DeepSeek：**
-- 提供商：OpenAI 兼容
-- Endpoint：`https://api.deepseek.com/v1/chat/completions`
-- 模型：`deepseek-chat`
+**DeepSeek（默认预设）：**
+- 预设：DeepSeek
+- Endpoint：`https://api.deepseek.com/chat/completions`（自动填入）
+- 模型：`deepseek-chat`（自动填入）
 
 **Moonshot (Kimi)：**
-- 提供商：OpenAI 兼容
-- Endpoint：`https://api.moonshot.cn/v1/chat/completions`
-- 模型：`moonshot-v1-8k`
+- 预设：Moonshot / Kimi
+- Endpoint：`https://api.moonshot.cn/v1/chat/completions`（自动填入）
+- 模型：`moonshot-v1-8k`（自动填入）
 
 **Anthropic Claude：**
-- 提供商：Anthropic Claude
-- Endpoint：留空（自动使用 `https://api.anthropic.com/v1/messages`）
-- 模型：`claude-sonnet-4-20250514`
+- 预设：Anthropic Claude
+- Endpoint：`https://api.anthropic.com/v1/messages`（自动填入）
+- 模型：`claude-sonnet-4-20250514`（自动填入）
 
 **本地 Ollama：**
-- 提供商：OpenAI 兼容
+- 预设：自定义（OpenAI 兼容）
 - Endpoint：`http://localhost:11434/v1/chat/completions`
 - API Key：填入任意值（如 `ollama`）
 - 模型：`llama3` 或你部署的模型名称

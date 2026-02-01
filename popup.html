@@ -373,10 +373,13 @@
 
     <div class="section-title">API 配置</div>
     <div class="api-config">
-      <label class="field-label">API 提供商</label>
+      <label class="field-label">服务商预设</label>
       <select id="providerSelect" class="model-select" style="margin-bottom: 8px;">
-        <option value="openai">OpenAI 兼容（OpenAI / DeepSeek / 本地模型等）</option>
+        <option value="deepseek">DeepSeek</option>
+        <option value="openai">OpenAI</option>
+        <option value="moonshot">Moonshot / Kimi</option>
         <option value="anthropic">Anthropic Claude</option>
+        <option value="custom">自定义（OpenAI 兼容）</option>
       </select>
 
       <label class="field-label">API Endpoint（留空使用默认地址）</label>

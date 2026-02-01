@@ -20,6 +20,35 @@ const ACTION_META = {
   check_facts:       { icon: '✅', name: 'Fact Check' }
 };
 
+// Provider presets: endpoint, default model, API format
+const PROVIDER_PRESETS = {
+  deepseek: {
+    endpoint: 'https://api.deepseek.com/chat/completions',
+    model: 'deepseek-chat',
+    format: 'openai'
+  },
+  openai: {
+    endpoint: 'https://api.openai.com/v1/chat/completions',
+    model: 'gpt-4o',
+    format: 'openai'
+  },
+  moonshot: {
+    endpoint: 'https://api.moonshot.cn/v1/chat/completions',
+    model: 'moonshot-v1-8k',
+    format: 'openai'
+  },
+  anthropic: {
+    endpoint: 'https://api.anthropic.com/v1/messages',
+    model: 'claude-sonnet-4-20250514',
+    format: 'anthropic'
+  },
+  custom: {
+    endpoint: '',
+    model: '',
+    format: 'openai'
+  }
+};
+
 document.addEventListener('DOMContentLoaded', () => {
   const providerSelect = document.getElementById('providerSelect');
   const endpointInput = document.getElementById('endpointInput');
@@ -37,9 +66,14 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // Update endpoint placeholder based on provider
+  // Auto-fill endpoint and model when provider preset changes
   providerSelect.addEventListener('change', () => {
-    updateEndpointPlaceholder();
+    const preset = PROVIDER_PRESETS[providerSelect.value];
+    if (preset) {
+      endpointInput.value = preset.endpoint;
+      if (preset.model) modelInput.value = preset.model;
+      endpointInput.placeholder = preset.endpoint || 'https://api.openai.com/v1/chat/completions';
+    }
   });
 
   // Save all config at once
@@ -54,10 +88,14 @@ document.addEventListener('DOMContentLoaded', () => {
     configStatus.textContent = '保存中...';
     configStatus.className = 'config-status';
 
-    // Save provider
+    // Determine API format from preset
+    const preset = PROVIDER_PRESETS[providerSelect.value];
+    const apiFormat = preset ? preset.format : 'openai';
+
+    // Save provider (API format: 'openai' or 'anthropic')
     await chrome.runtime.sendMessage({
       type: 'SET_PROVIDER',
-      provider: providerSelect.value
+      provider: apiFormat
     });
 
     // Save endpoint
@@ -92,14 +130,15 @@ document.addEventListener('DOMContentLoaded', () => {
   loadStats();
 });
 
-function updateEndpointPlaceholder() {
-  const provider = document.getElementById('providerSelect').value;
-  const endpointInput = document.getElementById('endpointInput');
-  if (provider === 'anthropic') {
-    endpointInput.placeholder = 'https://api.anthropic.com/v1/messages';
-  } else {
-    endpointInput.placeholder = 'https://api.openai.com/v1/chat/completions';
+// Detect which preset matches saved endpoint
+function detectPreset(endpoint, apiProvider) {
+  for (const [key, preset] of Object.entries(PROVIDER_PRESETS)) {
+    if (key === 'custom') continue;
+    if (preset.endpoint === endpoint) return key;
   }
+  if (apiProvider === 'anthropic') return 'anthropic';
+  if (endpoint) return 'custom';
+  return 'deepseek'; // default
 }
 
 function updateStatusBadge(configured) {
@@ -122,26 +161,28 @@ async function loadStatus() {
       document.getElementById('apiKeyInput').placeholder = '••••••••••••  (已配置)';
       document.getElementById('setupBanner').style.display = 'none';
     } else {
-      // Show setup banner when not configured
       document.getElementById('setupBanner').style.display = 'flex';
     }
 
-    // Restore provider
-    if (status.apiProvider) {
-      document.getElementById('providerSelect').value = status.apiProvider;
-    }
+    // Detect and restore preset
+    const detectedPreset = detectPreset(status.apiEndpoint, status.apiProvider);
+    document.getElementById('providerSelect').value = detectedPreset;
 
     // Restore endpoint
     if (status.apiEndpoint) {
       document.getElementById('endpointInput').value = status.apiEndpoint;
+    } else {
+      // Fill default endpoint from preset
+      const preset = PROVIDER_PRESETS[detectedPreset];
+      if (preset) {
+        document.getElementById('endpointInput').value = preset.endpoint;
+      }
     }
 
     // Restore model
     if (status.model) {
       document.getElementById('modelInput').value = status.model;
     }
-
-    updateEndpointPlaceholder();
   } catch {
     updateStatusBadge(false);
     document.getElementById('setupBanner').style.display = 'flex';

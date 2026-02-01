@@ -408,7 +408,7 @@ class AIEngine {
     this.apiKey = null;
     this.apiProvider = 'openai';   // 'anthropic' | 'openai'
     this.apiEndpoint = '';         // custom endpoint URL (empty = use default)
-    this.model = 'gpt-4o';
+    this.model = 'deepseek-chat';
     this.maxTokens = 1024;
     this.loadSettings();
   }
@@ -448,7 +448,7 @@ class AIEngine {
   getEffectiveEndpoint() {
     if (this.apiEndpoint) return this.apiEndpoint;
     if (this.apiProvider === 'anthropic') return 'https://api.anthropic.com/v1/messages';
-    return 'https://api.openai.com/v1/chat/completions';
+    return 'https://api.deepseek.com/chat/completions';
   }
 
   isConfigured() {

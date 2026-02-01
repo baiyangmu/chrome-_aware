@@ -350,10 +350,13 @@
         <div id="caa-settings-panel" class="caa-settings-panel" style="display:none;">
           <div class="caa-settings-title">API 配置</div>
           <div class="caa-settings-row">
-            <label class="caa-settings-label">API 提供商</label>
+            <label class="caa-settings-label">服务商预设</label>
             <select id="caa-provider-select" class="caa-select">
-              <option value="openai">OpenAI 兼容（OpenAI / DeepSeek / 本地模型等）</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="openai">OpenAI</option>
+              <option value="moonshot">Moonshot / Kimi</option>
               <option value="anthropic">Anthropic Claude</option>
+              <option value="custom">自定义（OpenAI 兼容）</option>
             </select>
           </div>
           <div class="caa-settings-row">
@@ -437,6 +440,25 @@
       this.loadRecommendations();
     }
 
+    // --- Provider presets (same as popup.js) ---
+    static PRESETS = {
+      deepseek:  { endpoint: 'https://api.deepseek.com/chat/completions',       model: 'deepseek-chat',             format: 'openai' },
+      openai:    { endpoint: 'https://api.openai.com/v1/chat/completions',       model: 'gpt-4o',                   format: 'openai' },
+      moonshot:  { endpoint: 'https://api.moonshot.cn/v1/chat/completions',      model: 'moonshot-v1-8k',           format: 'openai' },
+      anthropic: { endpoint: 'https://api.anthropic.com/v1/messages',            model: 'claude-sonnet-4-20250514', format: 'anthropic' },
+      custom:    { endpoint: '',                                                  model: '',                         format: 'openai' }
+    };
+
+    static detectPreset(endpoint, apiProvider) {
+      for (const [key, preset] of Object.entries(SidebarUI.PRESETS)) {
+        if (key === 'custom') continue;
+        if (preset.endpoint === endpoint) return key;
+      }
+      if (apiProvider === 'anthropic') return 'anthropic';
+      if (endpoint) return 'custom';
+      return 'deepseek';
+    }
+
     // --- Settings panel ---
     async initSettings() {
       try {
@@ -456,21 +478,26 @@
           keyInput.placeholder = '••••••••••••••••••  (已配置)';
         }
 
-        // Restore saved values
-        if (status.apiProvider) providerSelect.value = status.apiProvider;
-        if (status.apiEndpoint) endpointInput.value = status.apiEndpoint;
+        // Detect and restore preset
+        const detected = SidebarUI.detectPreset(status.apiEndpoint, status.apiProvider);
+        providerSelect.value = detected;
+
+        // Restore saved values (or fill from preset defaults)
+        if (status.apiEndpoint) {
+          endpointInput.value = status.apiEndpoint;
+        } else {
+          endpointInput.value = SidebarUI.PRESETS[detected]?.endpoint || '';
+        }
         if (status.model) modelInput.value = status.model;
 
-        // Update endpoint placeholder based on provider
-        const updatePlaceholder = () => {
-          if (providerSelect.value === 'anthropic') {
-            endpointInput.placeholder = 'https://api.anthropic.com/v1/messages';
-          } else {
-            endpointInput.placeholder = 'https://api.openai.com/v1/chat/completions';
+        // Auto-fill when preset changes
+        providerSelect.onchange = () => {
+          const preset = SidebarUI.PRESETS[providerSelect.value];
+          if (preset) {
+            endpointInput.value = preset.endpoint;
+            if (preset.model) modelInput.value = preset.model;
           }
         };
-        updatePlaceholder();
-        providerSelect.onchange = updatePlaceholder;
 
         // Bind save — saves all settings at once
         this.sidebar.querySelector('#caa-save-key-btn').onclick = async () => {
@@ -480,8 +507,12 @@
           statusEl.textContent = '保存中...';
           statusEl.className = 'caa-settings-status';
 
-          // Save provider
-          await chrome.runtime.sendMessage({ type: 'SET_PROVIDER', provider: providerSelect.value });
+          // Determine API format from preset
+          const preset = SidebarUI.PRESETS[providerSelect.value];
+          const apiFormat = preset ? preset.format : 'openai';
+
+          // Save provider (API format)
+          await chrome.runtime.sendMessage({ type: 'SET_PROVIDER', provider: apiFormat });
           // Save endpoint
           await chrome.runtime.sendMessage({ type: 'SET_ENDPOINT', endpoint: endpointInput.value.trim() });
           // Save model
